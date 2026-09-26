@@ -1,19 +1,32 @@
 #include <SDL2/SDL.h>
 #include <libretro.h>
+#include "font8x16.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <cctype>
+
+#include <dirent.h>
 
 #ifdef _WIN32
-#include <windows.h>
 #include <direct.h>
 #define PATH_SEP '\\'
 #else
 #include <unistd.h>
-#include <dirent.h>
 #define PATH_SEP '/'
 #endif
+
+extern "C" {
+void FDD_SetFD(int drive, const char* filename, int readonly);
+void FDD_EjectFD(int drive);
+void FDD_SetFDInt(void);
+void WinX68k_Reset(void);
+}
 
 // Forward declarations
 static bool SetupDirectories(const char *specified_path);
@@ -31,6 +44,9 @@ static unsigned s_video_width = 800;
 static unsigned s_video_height = 600;
 static bool s_fullscreen = false;
 
+// UI Framebuffer for Launcher / File Picker (800 x 600 RGB565)
+static uint16_t s_ui_buffer[800 * 600];
+
 // Input State
 static uint8_t s_keystate[RETROK_LAST];
 static uint16_t s_padstate[2]; // bitmask of RETRO_DEVICE_ID_JOYPAD_*
@@ -45,6 +61,8 @@ static uint16_t s_scancode_to_retro[SDL_NUM_SCANCODES];
 static char s_system_dir[512] = ".";
 static char s_save_dir[512] = ".";
 static bool s_running = true;
+static bool s_request_picker = false;
+static std::string s_current_fdd[2] = {"", ""};
 
 // Libretro logging callback
 static void retro_log_print(enum retro_log_level level, const char *fmt, ...)
@@ -175,7 +193,6 @@ static void retro_audio_sample_callback(int16_t left, int16_t right)
 {
     int16_t sample[2] = { left, right };
     if (s_audio_dev) {
-        // Prevent audio latency buildup (> 150ms queued)
         if (SDL_GetQueuedAudioSize(s_audio_dev) < (AUDIO_SAMPLE_RATE * 4 * 15 / 100)) {
             SDL_QueueAudio(s_audio_dev, sample, sizeof(sample));
         }
@@ -320,15 +337,16 @@ static void ProcessSDLEvent(const SDL_Event *e)
         bool down = (e->type == SDL_KEYDOWN);
         SDL_Scancode sc = e->key.keysym.scancode;
 
-        // Hotkeys
+        // F12 / F11: Open FDD Disk Selector / Launcher
+        if (down && (sc == SDL_SCANCODE_F12 || sc == SDL_SCANCODE_F11)) {
+            s_request_picker = true;
+            break;
+        }
+
+        // F10: Toggle Fullscreen
         if (down && sc == SDL_SCANCODE_F10) {
             s_fullscreen = !s_fullscreen;
             SDL_SetWindowFullscreen(s_window, s_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-            break;
-        }
-        if (down && sc == SDL_SCANCODE_F11) {
-            s_mouse_grabbed = !s_mouse_grabbed;
-            SDL_SetRelativeMouseMode(s_mouse_grabbed ? SDL_TRUE : SDL_FALSE);
             break;
         }
 
@@ -340,7 +358,7 @@ static void ProcessSDLEvent(const SDL_Event *e)
             }
         }
 
-        // Also map keyboard to Joypad 0 for convenient play
+        // Map keyboard to Joypad 0 for convenient play
         #define SET_PAD_BIT(bit, val) \
             if (val) s_padstate[0] |= (1 << (bit)); \
             else s_padstate[0] &= ~(1 << (bit))
@@ -411,12 +429,6 @@ static bool FileExists(const char *path)
     return (stat(path, &st) == 0 && !S_ISDIR(st.st_mode));
 }
 
-static bool DirExists(const char *path)
-{
-    struct stat st;
-    return (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
-}
-
 static void CopyFileIfMissing(const char *src, const char *dst)
 {
     if (FileExists(dst)) return;
@@ -436,14 +448,12 @@ static void CopyFileIfMissing(const char *src, const char *dst)
 
 static bool SetupDirectories(const char *specified_path)
 {
-    // Try to ensure "keropi" directory exists
 #ifdef _WIN32
     _mkdir("keropi");
 #else
     mkdir("keropi", 0755);
 #endif
 
-    // If BIOS files are in dist_baremetal/keropi or public/system, copy them to keropi/
     const char *candidates_ipl[] = {
         "keropi/iplrom.dat",
         "dist_baremetal/keropi/iplrom.dat",
@@ -476,30 +486,434 @@ static bool SetupDirectories(const char *specified_path)
     return true;
 }
 
-static const char *FindDisk(const char *user_arg)
-{
-    if (user_arg && FileExists(user_arg)) {
-        return user_arg;
+// -------------------------------------------------------------
+// Interactive File & Directory Picker
+// -------------------------------------------------------------
+struct FileEntry {
+    std::string name;
+    std::string full_path;
+    bool is_dir;
+    uint64_t size;
+};
+
+class CFilePicker {
+public:
+    std::string current_dir;
+    std::vector<FileEntry> entries;
+    int selected_idx;
+    int scroll_offset;
+    int target_drive; // 0 for FDD0, 1 for FDD1
+    std::string status_msg;
+    uint32_t status_timer;
+
+    CFilePicker() : selected_idx(0), scroll_offset(0), target_drive(0), status_timer(0) {
+        char cwd[1024];
+#ifdef _WIN32
+        if (_getcwd(cwd, sizeof(cwd))) current_dir = cwd;
+#else
+        if (getcwd(cwd, sizeof(cwd))) current_dir = cwd;
+#endif
+        else current_dir = ".";
     }
 
-    static const char *disks[] = {
-        "human302.xdf",
-        "keropi/human302.xdf",
-        "dist_baremetal/human302.xdf",
-        "public/system/human302.xdf",
-        "boot.xdf",
-        "boot.dim",
-        "boot.d88"
-    };
+    void SetStatus(const std::string &msg) {
+        status_msg = msg;
+        status_timer = SDL_GetTicks() + 3000;
+    }
 
-    for (size_t i = 0; i < sizeof(disks)/sizeof(disks[0]); i++) {
-        if (FileExists(disks[i])) {
-            return disks[i];
+    void ScanDirectory() {
+        entries.clear();
+        selected_idx = 0;
+        scroll_offset = 0;
+
+        // Parent directory ".."
+        if (current_dir != "/" && current_dir != "\\") {
+            FileEntry parent;
+            parent.name = "..";
+            parent.full_path = "";
+            parent.is_dir = true;
+            parent.size = 0;
+            entries.push_back(parent);
         }
+
+        std::vector<FileEntry> dirs;
+        std::vector<FileEntry> files;
+
+        DIR *dir = opendir(current_dir.c_str());
+        if (dir) {
+            struct dirent *de;
+            while ((de = readdir(dir)) != NULL) {
+                if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+
+                std::string full = current_dir;
+                if (!full.empty() && full.back() != '/' && full.back() != '\\') {
+                    full += PATH_SEP;
+                }
+                full += de->d_name;
+
+                struct stat st;
+                if (stat(full.c_str(), &st) == 0) {
+                    if (S_ISDIR(st.st_mode)) {
+                        FileEntry fe;
+                        fe.name = de->d_name;
+                        fe.full_path = full;
+                        fe.is_dir = true;
+                        fe.size = 0;
+                        dirs.push_back(fe);
+                    } else {
+                        std::string name = de->d_name;
+                        size_t dot = name.find_last_of('.');
+                        if (dot != std::string::npos) {
+                            std::string ext = name.substr(dot);
+                            for (char &c : ext) c = tolower(c);
+                            if (ext == ".xdf" || ext == ".dim" || ext == ".d88" ||
+                                ext == ".88d" || ext == ".hdm" || ext == ".dup" ||
+                                ext == ".2hd" || ext == ".img" || ext == ".hds" || ext == ".hdf") {
+                                FileEntry fe;
+                                fe.name = de->d_name;
+                                fe.full_path = full;
+                                fe.is_dir = false;
+                                fe.size = (uint64_t)st.st_size;
+                                files.push_back(fe);
+                            }
+                        }
+                    }
+                }
+            }
+            closedir(dir);
+        }
+
+        std::sort(dirs.begin(), dirs.end(), [](const FileEntry &a, const FileEntry &b) {
+            return strcasecmp(a.name.c_str(), b.name.c_str()) < 0;
+        });
+        std::sort(files.begin(), files.end(), [](const FileEntry &a, const FileEntry &b) {
+            return strcasecmp(a.name.c_str(), b.name.c_str()) < 0;
+        });
+
+        for (auto &d : dirs) entries.push_back(d);
+        for (auto &f : files) entries.push_back(f);
     }
 
-    return NULL;
-}
+    void NavigateToParent() {
+        if (current_dir == "/" || current_dir == "\\") return;
+        size_t last_sep = current_dir.find_last_of("/\\");
+        if (last_sep != std::string::npos) {
+            if (last_sep == 0) current_dir = "/";
+            else current_dir = current_dir.substr(0, last_sep);
+        }
+        ScanDirectory();
+    }
+
+    void RenderUI() {
+        // Clear background with dark navy blue (0x0842)
+        FillBoxRGB565(s_ui_buffer, 800, 0, 0, 800, 600, 0x0842);
+
+        // Header Bar (Y: 0..65)
+        FillBoxRGB565(s_ui_buffer, 800, 0, 0, 800, 65, 0x10A4);
+        DrawBoxRGB565(s_ui_buffer, 800, 0, 0, 800, 65, 0x31C8);
+
+        DrawTextRGB565(s_ui_buffer, 800, 20, 10, "SHARP X68000 (PX68K) - FDD / DISK SELECTOR", 0xFFE0, 0x10A4);
+
+        char driveStr[128];
+        snprintf(driveStr, sizeof(driveStr), "Target: [ FDD %d (%s) ]   (Press [1] for FDD0, [2] for FDD1)",
+                 target_drive, target_drive == 0 ? "Drive A" : "Drive B");
+        DrawTextRGB565(s_ui_buffer, 800, 20, 28, driveStr, 0x07FF, 0x10A4);
+
+        // Currently loaded disks
+        const char *cur0 = !s_current_fdd[0].empty() ? s_current_fdd[0].c_str() : "<Empty>";
+        const char *cur1 = !s_current_fdd[1].empty() ? s_current_fdd[1].c_str() : "<Empty>";
+        char fddStatus[256];
+        snprintf(fddStatus, sizeof(fddStatus), "FDD0: %.35s   |   FDD1: %.35s", cur0, cur1);
+        DrawTextRGB565(s_ui_buffer, 800, 20, 46, fddStatus, 0xCE79, 0x10A4);
+
+        // Directory Path Bar (Y: 72..96)
+        FillBoxRGB565(s_ui_buffer, 800, 10, 72, 780, 24, 0x18C6);
+        DrawBoxRGB565(s_ui_buffer, 800, 10, 72, 780, 24, 0x4228);
+        char pathBuf[256];
+        snprintf(pathBuf, sizeof(pathBuf), "Directory: %.90s", current_dir.c_str());
+        DrawTextRGB565(s_ui_buffer, 800, 18, 76, pathBuf, 0xFFE0, 0x18C6);
+
+        // File List Container (Y: 102..526)
+        FillBoxRGB565(s_ui_buffer, 800, 10, 102, 780, 424, 0x0000);
+        DrawBoxRGB565(s_ui_buffer, 800, 10, 102, 780, 424, 0x31A6);
+
+        const int max_visible = 21;
+        int total = (int)entries.size();
+
+        if (total == 0) {
+            DrawTextRGB565(s_ui_buffer, 800, 40, 130, "(No X68000 disk images found in this directory)", 0x8410, 0x0000);
+        } else {
+            for (int i = 0; i < max_visible; i++) {
+                int idx = scroll_offset + i;
+                if (idx >= total) break;
+
+                int y_pos = 106 + i * 20;
+                bool is_sel = (idx == selected_idx);
+
+                if (is_sel) {
+                    FillBoxRGB565(s_ui_buffer, 800, 12, y_pos - 1, 755, 19, 0x035D);
+                }
+
+                uint16_t bg = is_sel ? 0x035D : 0x0000;
+                const auto &e = entries[idx];
+
+                if (e.name == "..") {
+                    DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[UP-DIR] ..  (Parent Directory)", is_sel ? 0xFFFF : 0xFFE0, bg);
+                } else if (e.is_dir) {
+                    DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[DIR]   ", is_sel ? 0xFFFF : 0xFFE0, bg);
+                    std::string dname = e.name + "/";
+                    if (dname.length() > 60) dname = dname.substr(0, 57) + "...";
+                    DrawTextRGB565(s_ui_buffer, 800, 84, y_pos, dname.c_str(), is_sel ? 0xFFFF : 0xFFE0, bg);
+                } else {
+                    bool is_hdd = (e.name.find(".hdf") != std::string::npos || e.name.find(".hds") != std::string::npos);
+                    uint16_t tag_color = is_hdd ? 0x07E0 : 0x07FF;
+                    DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, is_hdd ? "[HDD]   " : "[FDD]   ", is_sel ? 0xFFFF : tag_color, bg);
+
+                    std::string fname = e.name;
+                    if (fname.length() > 58) fname = fname.substr(0, 55) + "...";
+                    DrawTextRGB565(s_ui_buffer, 800, 84, y_pos, fname.c_str(), 0xFFFF, bg);
+
+                    // File size
+                    char sizeStr[32];
+                    if (e.size >= 1024 * 1024) {
+                        snprintf(sizeStr, sizeof(sizeStr), "%5.1f MB", (double)e.size / (1024.0 * 1024.0));
+                    } else {
+                        snprintf(sizeStr, sizeof(sizeStr), "%5u KB", (unsigned)(e.size / 1024));
+                    }
+                    DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, sizeStr, is_sel ? 0xFFFF : 0x9CE7, bg);
+                }
+            }
+
+            // Scrollbar
+            if (total > max_visible) {
+                int sb_x = 776;
+                int sb_y = 106;
+                int sb_h = 416;
+                FillBoxRGB565(s_ui_buffer, 800, sb_x, sb_y, 8, sb_h, 0x18C6);
+
+                int thumb_h = std::max(20, (sb_h * max_visible) / total);
+                int thumb_y = sb_y + (scroll_offset * (sb_h - thumb_h)) / (total - max_visible);
+                FillBoxRGB565(s_ui_buffer, 800, sb_x, thumb_y, 8, thumb_h, 0x07FF);
+            }
+        }
+
+        // Status Toast Message
+        if (SDL_GetTicks() < status_timer && !status_msg.empty()) {
+            FillBoxRGB565(s_ui_buffer, 800, 150, 485, 500, 30, 0x2124);
+            DrawBoxRGB565(s_ui_buffer, 800, 150, 485, 500, 30, 0x07FF);
+            DrawTextRGB565(s_ui_buffer, 800, 170, 492, status_msg.c_str(), 0xFFFF, 0x2124);
+        }
+
+        // Footer Bar (Y: 532..594)
+        FillBoxRGB565(s_ui_buffer, 800, 0, 532, 800, 68, 0x10A4);
+        DrawBoxRGB565(s_ui_buffer, 800, 0, 532, 800, 68, 0x31C8);
+
+        DrawTextRGB565(s_ui_buffer, 800, 20, 540,
+                       "[Enter]: Open / Insert Disk    [Backspace]: Up Directory    [1 / 2]: Target FDD0/FDD1",
+                       0xFFFF, 0x10A4);
+        DrawTextRGB565(s_ui_buffer, 800, 20, 558,
+                       "[E]: Eject Target Drive         [R]: Reset System            [Esc]: Resume Emulation",
+                       0xCE79, 0x10A4);
+        DrawTextRGB565(s_ui_buffer, 800, 20, 576,
+                       "Mouse: Click to Select, Double-click to Open/Insert, Scroll Wheel to Navigate",
+                       0x8410, 0x10A4);
+    }
+
+    // Modal Loop: returns true if disk was selected or action taken
+    bool RunModal(SDL_Window *win, SDL_Renderer *rend, SDL_Texture *&tex,
+                  std::string &out_path, int &out_drive, bool is_startup = false)
+    {
+        ScanDirectory();
+
+        // Release mouse grab if active
+        if (s_mouse_grabbed) {
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+        }
+
+        const int max_visible = 21;
+        uint32_t last_click_time = 0;
+        int last_click_idx = -1;
+        bool modal_active = true;
+        bool selected = false;
+
+        while (modal_active && s_running) {
+            SDL_Event e;
+            while (SDL_PollEvent(&e)) {
+                if (e.type == SDL_QUIT) {
+                    s_running = false;
+                    modal_active = false;
+                    return false;
+                }
+
+                if (e.type == SDL_KEYDOWN) {
+                    SDL_Keycode key = e.key.keysym.sym;
+                    int total = (int)entries.size();
+
+                    switch (key) {
+                    case SDLK_UP:
+                        if (selected_idx > 0) {
+                            selected_idx--;
+                            if (selected_idx < scroll_offset) {
+                                scroll_offset = selected_idx;
+                            }
+                        }
+                        break;
+                    case SDLK_DOWN:
+                        if (selected_idx < total - 1) {
+                            selected_idx++;
+                            if (selected_idx >= scroll_offset + max_visible) {
+                                scroll_offset = selected_idx - max_visible + 1;
+                            }
+                        }
+                        break;
+                    case SDLK_PAGEUP:
+                        selected_idx = std::max(0, selected_idx - max_visible);
+                        scroll_offset = std::max(0, scroll_offset - max_visible);
+                        break;
+                    case SDLK_PAGEDOWN:
+                        selected_idx = std::min(total - 1, selected_idx + max_visible);
+                        if (selected_idx >= scroll_offset + max_visible) {
+                            scroll_offset = std::min(std::max(0, total - max_visible), scroll_offset + max_visible);
+                        }
+                        break;
+                    case SDLK_HOME:
+                        selected_idx = 0;
+                        scroll_offset = 0;
+                        break;
+                    case SDLK_END:
+                        selected_idx = std::max(0, total - 1);
+                        scroll_offset = std::max(0, total - max_visible);
+                        break;
+                    case SDLK_BACKSPACE:
+                        NavigateToParent();
+                        break;
+                    case SDLK_1:
+                        target_drive = 0;
+                        SetStatus("Target switched to FDD0 (Drive A)");
+                        break;
+                    case SDLK_2:
+                        target_drive = 1;
+                        SetStatus("Target switched to FDD1 (Drive B)");
+                        break;
+                    case SDLK_e:
+                        if (!is_startup) {
+                            FDD_EjectFD(target_drive);
+                            s_current_fdd[target_drive] = "";
+                            FDD_SetFDInt();
+                            char msg[64];
+                            snprintf(msg, sizeof(msg), "FDD%d Ejected", target_drive);
+                            SetStatus(msg);
+                        }
+                        break;
+                    case SDLK_r:
+                        if (!is_startup) {
+                            WinX68k_Reset();
+                            SetStatus("System Resetting...");
+                        }
+                        break;
+                    case SDLK_ESCAPE:
+                    case SDLK_F11:
+                    case SDLK_F12:
+                        modal_active = false;
+                        break;
+                    case SDLK_RETURN:
+                    case SDLK_KP_ENTER: {
+                        if (selected_idx >= 0 && selected_idx < total) {
+                            const auto &entry = entries[selected_idx];
+                            if (entry.name == "..") {
+                                NavigateToParent();
+                            } else if (entry.is_dir) {
+                                current_dir = entry.full_path;
+                                ScanDirectory();
+                            } else {
+                                out_path = entry.full_path;
+                                out_drive = target_drive;
+                                selected = true;
+                                modal_active = false;
+                            }
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                    }
+                }
+
+                if (e.type == SDL_MOUSEWHEEL) {
+                    int total = (int)entries.size();
+                    if (e.wheel.y > 0) { // Scroll Up
+                        scroll_offset = std::max(0, scroll_offset - 3);
+                    } else if (e.wheel.y < 0) { // Scroll Down
+                        scroll_offset = std::min(std::max(0, total - max_visible), scroll_offset + 3);
+                    }
+                }
+
+                if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+                    int my = e.button.y;
+                    int mx = e.button.x;
+
+                    // Click inside list area
+                    if (my >= 106 && my < 106 + max_visible * 20 && mx >= 10 && mx <= 770) {
+                        int row = (my - 106) / 20;
+                        int idx = scroll_offset + row;
+                        if (idx >= 0 && idx < (int)entries.size()) {
+                            uint32_t now = SDL_GetTicks();
+                            if (idx == selected_idx && (now - last_click_time) < 400) {
+                                // Double click!
+                                const auto &entry = entries[idx];
+                                if (entry.name == "..") {
+                                    NavigateToParent();
+                                } else if (entry.is_dir) {
+                                    current_dir = entry.full_path;
+                                    ScanDirectory();
+                                } else {
+                                    out_path = entry.full_path;
+                                    out_drive = target_drive;
+                                    selected = true;
+                                    modal_active = false;
+                                }
+                            } else {
+                                selected_idx = idx;
+                            }
+                            last_click_time = now;
+                            last_click_idx = idx;
+                        }
+                    }
+                }
+            }
+
+            // Render Launcher Frame
+            RenderUI();
+
+            // Update texture (800x600 RGB565)
+            if (!tex || s_video_width != 800 || s_video_height != 600) {
+                if (tex) SDL_DestroyTexture(tex);
+                s_video_width = 800;
+                s_video_height = 600;
+                tex = SDL_CreateTexture(rend, SDL_PIXELFORMAT_RGB565,
+                                        SDL_TEXTUREACCESS_STREAMING, 800, 600);
+            }
+
+            if (tex) {
+                SDL_UpdateTexture(tex, NULL, s_ui_buffer, 800 * sizeof(uint16_t));
+                SDL_RenderClear(rend);
+                SDL_RenderCopy(rend, tex, NULL, NULL);
+                SDL_RenderPresent(rend);
+            }
+
+            SDL_Delay(16); // ~60 FPS
+        }
+
+        // Restore mouse grab if desired
+        if (s_mouse_grabbed) {
+            SDL_SetRelativeMouseMode(SDL_TRUE);
+        }
+
+        return selected;
+    }
+};
+
+static CFilePicker s_picker;
 
 int main(int argc, char *argv[])
 {
@@ -511,8 +925,9 @@ int main(int argc, char *argv[])
             printf("Options:\n");
             printf("  -h, --help       Show this help message\n");
             printf("Hotkeys:\n");
+            printf("  F12 / F11        Open FDD Disk Selector / Launcher\n");
             printf("  F10              Toggle Fullscreen\n");
-            printf("  F11 / Mid-Click  Toggle Mouse Grab\n");
+            printf("  Mid-Click        Toggle Mouse Grab\n");
             printf("  Arrows / Enter   Joypad D-Pad / Start\n");
             printf("  Z, X, A, S       Joypad B, A, Y, X\n");
             return 0;
@@ -575,19 +990,29 @@ int main(int argc, char *argv[])
 
     retro_init();
 
-    const char *bootDisk = FindDisk(disk_to_load);
+    std::string bootDiskPath;
+    int bootDrive = 0;
+
+    // If no disk was given on command line, show the Directory & File Selector!
+    if (!disk_to_load) {
+        printf("[px68k] Opening FDD Disk Selector...\n");
+        if (s_picker.RunModal(s_window, s_renderer, s_texture, bootDiskPath, bootDrive, true)) {
+            disk_to_load = bootDiskPath.c_str();
+        }
+    }
+
     struct retro_game_info game;
     memset(&game, 0, sizeof(game));
 
-    if (bootDisk) {
-        printf("[px68k] Booting with disk: %s\n", bootDisk);
-        game.path = bootDisk;
+    if (disk_to_load && FileExists(disk_to_load)) {
+        printf("[px68k] Booting with disk: %s\n", disk_to_load);
+        game.path = disk_to_load;
         if (!retro_load_game(&game)) {
-            fprintf(stderr, "[px68k] Failed to load disk: %s\n", bootDisk);
+            fprintf(stderr, "[px68k] Failed to load disk: %s\n", disk_to_load);
             retro_load_game(NULL);
         }
     } else {
-        printf("[px68k] No boot disk found; starting without disk\n");
+        printf("[px68k] Starting without disk...\n");
         retro_load_game(NULL);
     }
 
@@ -600,6 +1025,22 @@ int main(int argc, char *argv[])
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             ProcessSDLEvent(&e);
+        }
+
+        // Handle in-game Disk Selector request (F12 or F11)
+        if (s_request_picker) {
+            s_request_picker = false;
+            std::string new_disk;
+            int new_drive = 0;
+            if (s_picker.RunModal(s_window, s_renderer, s_texture, new_disk, new_drive, false)) {
+                if (!new_disk.empty()) {
+                    FDD_SetFD(new_drive, (char*)new_disk.c_str(), 0);
+                    s_current_fdd[new_drive] = new_disk;
+                    FDD_SetFDInt();
+                    printf("[px68k] Inserted %s into FDD%d\n", new_disk.c_str(), new_drive);
+                }
+            }
+            next_frame = SDL_GetPerformanceCounter() + ticks_per_frame;
         }
 
         retro_run();
