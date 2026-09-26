@@ -22,7 +22,6 @@ INCLUDES := -Ipx68k-libretro \
             -Ipx68k-libretro/x68k \
             -Ipx68k-libretro/fmgen \
             -Ipx68k-libretro/m68000 \
-            -ICircle \
             -ISDL
 
 C_SRCS := $(wildcard px68k-libretro/m68000/m68000.c) \

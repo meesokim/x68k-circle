@@ -1,6 +1,10 @@
 #ifndef _DIRENT_H_
 #define _DIRENT_H_
 
+#if defined(__linux__) || defined(_WIN32)
+#include_next <dirent.h>
+#else
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,4 +33,6 @@ void rewinddir(DIR *dirp);
 }
 #endif
 
-#endif
+#endif // !__linux__ && !_WIN32
+
+#endif // _DIRENT_H_

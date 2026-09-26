@@ -632,6 +632,9 @@ public:
 
         for (auto &d : dirs) entries.push_back(d);
         for (auto &f : files) entries.push_back(f);
+
+        printf("[px68k] Scanned '%s': %d subdirs, %d disks (total %zu entries)\n",
+               current_dir.c_str(), num_subdirs, num_disk_files, entries.size());
     }
 
     void NavigateToParent() {
