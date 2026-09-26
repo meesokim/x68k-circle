@@ -14,3 +14,8 @@ mcp/node_modules/
 # 設定読み込み中は常に非空になり、版表記のdirty判定(tools/compute-version.mjs)を
 # 汚染して、クリーンなツリーからビルドしても常に dirty 扱いになってしまう。
 *.timestamp-*.mjs
+
+# Circle baremetal build artifacts
+build/
+dist_baremetal/
+px68k-libretro/
