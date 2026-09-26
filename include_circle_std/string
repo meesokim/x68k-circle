@@ -1,0 +1,153 @@
+#ifndef _CIRCLE_STD_STRING_H_
+#define _CIRCLE_STD_STRING_H_
+
+#include <stddef.h>
+#include <string.h>
+#include <stdlib.h>
+
+namespace std {
+
+class string {
+private:
+    char* m_data;
+    size_t m_len;
+    size_t m_cap;
+
+    void init(const char* s, size_t len) {
+        m_len = len;
+        m_cap = len + 16;
+        m_data = (char*)malloc(m_cap + 1);
+        if (s && len) {
+            memcpy(m_data, s, len);
+        }
+        m_data[m_len] = '\0';
+    }
+
+public:
+    string() {
+        init("", 0);
+    }
+
+    string(const char* s) {
+        init(s ? s : "", s ? strlen(s) : 0);
+    }
+
+    string(const char* s, size_t n) {
+        init(s ? s : "", n);
+    }
+
+    string(const string& o) {
+        init(o.m_data, o.m_len);
+    }
+
+    ~string() {
+        if (m_data) free(m_data);
+    }
+
+    string& operator=(const string& o) {
+        if (this != &o) {
+            if (m_data) free(m_data);
+            init(o.m_data, o.m_len);
+        }
+        return *this;
+    }
+
+    string& operator=(const char* s) {
+        if (m_data) free(m_data);
+        init(s ? s : "", s ? strlen(s) : 0);
+        return *this;
+    }
+
+    const char* c_str() const { return m_data ? m_data : ""; }
+    const char* data() const { return m_data ? m_data : ""; }
+    size_t length() const { return m_len; }
+    size_t size() const { return m_len; }
+    bool empty() const { return m_len == 0; }
+
+    char operator[](size_t idx) const { return m_data[idx]; }
+    char& operator[](size_t idx) { return m_data[idx]; }
+
+    string& operator+=(const string& o) {
+        append(o.m_data, o.m_len);
+        return *this;
+    }
+
+    string& operator+=(const char* s) {
+        if (s) append(s, strlen(s));
+        return *this;
+    }
+
+    string& operator+=(char c) {
+        char buf[2] = { c, 0 };
+        append(buf, 1);
+        return *this;
+    }
+
+    void append(const char* s, size_t len) {
+        if (!s || !len) return;
+        if (m_len + len >= m_cap) {
+            m_cap = (m_len + len) * 2 + 16;
+            char* n = (char*)realloc(m_data, m_cap + 1);
+            if (n) m_data = n;
+        }
+        memcpy(m_data + m_len, s, len);
+        m_len += len;
+        m_data[m_len] = '\0';
+    }
+
+    void clear() {
+        m_len = 0;
+        if (m_data) m_data[0] = '\0';
+    }
+
+    static const size_t npos = (size_t)-1;
+
+    size_t find(const char* s, size_t pos = 0) const {
+        if (!s || pos >= m_len) return npos;
+        const char* p = strstr(m_data + pos, s);
+        if (!p) return npos;
+        return (size_t)(p - m_data);
+    }
+
+    size_t find(const string& s, size_t pos = 0) const {
+        return find(s.c_str(), pos);
+    }
+
+    string substr(size_t pos = 0, size_t n = (size_t)-1) const {
+        if (pos >= m_len) return string("");
+        size_t rlen = (n > m_len - pos) ? (m_len - pos) : n;
+        return string(m_data + pos, rlen);
+    }
+
+    bool operator==(const string& o) const {
+        return m_len == o.m_len && strcmp(m_data, o.m_data) == 0;
+    }
+    bool operator==(const char* s) const {
+        return strcmp(m_data, s ? s : "") == 0;
+    }
+    bool operator!=(const string& o) const { return !(*this == o); }
+    bool operator!=(const char* s) const { return !(*this == s); }
+    bool operator<(const string& o) const { return strcmp(m_data, o.m_data) < 0; }
+};
+
+inline string operator+(const string& lhs, const string& rhs) {
+    string res = lhs;
+    res += rhs;
+    return res;
+}
+
+inline string operator+(const string& lhs, const char* rhs) {
+    string res = lhs;
+    res += rhs;
+    return res;
+}
+
+inline string operator+(const char* lhs, const string& rhs) {
+    string res(lhs);
+    res += rhs;
+    return res;
+}
+
+} // namespace std
+
+#endif

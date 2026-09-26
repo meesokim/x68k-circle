@@ -1,0 +1,96 @@
+#ifndef _CIRCLE_STD_MAP_H_
+#define _CIRCLE_STD_MAP_H_
+
+#include <stddef.h>
+#include <stdlib.h>
+#include "utility"
+
+namespace std {
+
+template<typename Key, typename Value>
+class map {
+public:
+    typedef pair<const Key, Value> value_type;
+
+    struct Node {
+        Key first;
+        Value second;
+        Node* left;
+        Node* right;
+        Node(const Key& k, const Value& v) : first(k), second(v), left(nullptr), right(nullptr) {}
+    };
+
+    struct iterator {
+        Node* node;
+        iterator(Node* n = nullptr) : node(n) {}
+        value_type& operator*() { return *(value_type*)node; }
+        value_type* operator->() { return (value_type*)node; }
+        bool operator==(const iterator& o) const { return node == o.node; }
+        bool operator!=(const iterator& o) const { return node != o.node; }
+    };
+
+private:
+    Node* m_root;
+    size_t m_size;
+
+    Node* insertNode(Node*& root, const Key& k, const Value& v) {
+        if (!root) {
+            root = new Node(k, v);
+            m_size++;
+            return root;
+        }
+        if (k < root->first) {
+            return insertNode(root->left, k, v);
+        } else if (root->first < k) {
+            return insertNode(root->right, k, v);
+        } else {
+            root->second = v;
+            return root;
+        }
+    }
+
+    Node* findNode(Node* root, const Key& k) const {
+        if (!root) return nullptr;
+        if (k < root->first) return findNode(root->left, k);
+        if (root->first < k) return findNode(root->right, k);
+        return root;
+    }
+
+    void freeNode(Node* root) {
+        if (!root) return;
+        freeNode(root->left);
+        freeNode(root->right);
+        delete root;
+    }
+
+public:
+    map() : m_root(nullptr), m_size(0) {}
+    ~map() { clear(); }
+
+    void clear() {
+        freeNode(m_root);
+        m_root = nullptr;
+        m_size = 0;
+    }
+
+    size_t size() const { return m_size; }
+    bool empty() const { return m_size == 0; }
+
+    iterator find(const Key& k) const {
+        Node* n = findNode(m_root, k);
+        return iterator(n);
+    }
+
+    iterator end() const { return iterator(nullptr); }
+
+    Value& operator[](const Key& k) {
+        Node* n = findNode(m_root, k);
+        if (n) return n->second;
+        n = insertNode(m_root, k, Value());
+        return n->second;
+    }
+};
+
+} // namespace std
+
+#endif

@@ -1,0 +1,19 @@
+#ifndef _CIRCLE_STD_CSTDIO_H_
+#define _CIRCLE_STD_CSTDIO_H_
+
+#include <stdio.h>
+
+namespace std {
+    using ::FILE;
+    using ::fopen;
+    using ::fclose;
+    using ::fread;
+    using ::fwrite;
+    using ::fseek;
+    using ::ftell;
+    using ::sprintf;
+    using ::snprintf;
+    using ::printf;
+}
+
+#endif

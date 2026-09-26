@@ -9,6 +9,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include "zip_helper.h"
+
+extern "C" void FDD_SetFD(int drive, const char* filename, int readonly);
 
 static void retro_log_print(enum retro_log_level level, const char *fmt, ...)
 {
@@ -188,6 +191,19 @@ static const char* FindBootDisk(void)
                         snprintf(foundPath, sizeof(foundPath), "%s/%s", searchDirs[d], fno.fname);
                         f_closedir(&dir);
                         return foundPath;
+                    } else if (strcasecmp(ext, ".zip") == 0) {
+                        static char foundZip[256];
+                        snprintf(foundZip, sizeof(foundZip), "%s/%s", searchDirs[d], fno.fname);
+                        f_closedir(&dir);
+                        auto disks = ExtractAllDisksFromZip(foundZip, "SD:/keropi/cache");
+                        if (!disks.empty()) {
+                            static char extractedBoot[256];
+                            strncpy(extractedBoot, disks[0].c_str(), sizeof(extractedBoot) - 1);
+                            if (disks.size() > 1) {
+                                FDD_SetFD(1, (char*)disks[1].c_str(), 0);
+                            }
+                            return extractedBoot;
+                        }
                     }
                 }
             }

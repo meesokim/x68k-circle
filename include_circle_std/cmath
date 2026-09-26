@@ -1,0 +1,21 @@
+#ifndef _CIRCLE_STD_CMATH_H_
+#define _CIRCLE_STD_CMATH_H_
+
+#include <math.h>
+#include <stdlib.h>
+
+namespace std {
+    using ::sin;
+    using ::cos;
+    using ::tan;
+    using ::sqrt;
+    using ::pow;
+    using ::log;
+    using ::exp;
+    using ::floor;
+    using ::ceil;
+    using ::fabs;
+    using ::abs;
+}
+
+#endif

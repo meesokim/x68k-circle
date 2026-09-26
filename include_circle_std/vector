@@ -1,0 +1,115 @@
+#ifndef _CIRCLE_STD_VECTOR_H_
+#define _CIRCLE_STD_VECTOR_H_
+
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#include <new>
+
+namespace std {
+
+template<typename T>
+class vector {
+private:
+    T* m_data;
+    size_t m_size;
+    size_t m_cap;
+
+public:
+    vector() : m_data(nullptr), m_size(0), m_cap(0) {}
+    vector(size_t n, const T& val = T()) : m_data(nullptr), m_size(0), m_cap(0) {
+        resize(n, val);
+    }
+    vector(const vector& o) : m_data(nullptr), m_size(0), m_cap(0) {
+        if (o.m_size > 0) {
+            reserve(o.m_size);
+            for (size_t i = 0; i < o.m_size; i++) {
+                new (&m_data[i]) T(o.m_data[i]);
+            }
+            m_size = o.m_size;
+        }
+    }
+    ~vector() {
+        clear();
+        if (m_data) free(m_data);
+    }
+
+    vector& operator=(const vector& o) {
+        if (this != &o) {
+            clear();
+            if (o.m_size > 0) {
+                reserve(o.m_size);
+                for (size_t i = 0; i < o.m_size; i++) {
+                    new (&m_data[i]) T(o.m_data[i]);
+                }
+                m_size = o.m_size;
+            }
+        }
+        return *this;
+    }
+
+    size_t size() const { return m_size; }
+    size_t capacity() const { return m_cap; }
+    bool empty() const { return m_size == 0; }
+
+    T& operator[](size_t idx) { return m_data[idx]; }
+    const T& operator[](size_t idx) const { return m_data[idx]; }
+
+    void reserve(size_t n) {
+        if (n > m_cap) {
+            T* newdata = (T*)malloc(n * sizeof(T));
+            for (size_t i = 0; i < m_size; i++) {
+                new (&newdata[i]) T(m_data[i]);
+                m_data[i].~T();
+            }
+            if (m_data) free(m_data);
+            m_data = newdata;
+            m_cap = n;
+        }
+    }
+
+    void resize(size_t n, const T& val = T()) {
+        if (n < m_size) {
+            for (size_t i = n; i < m_size; i++) {
+                m_data[i].~T();
+            }
+            m_size = n;
+        } else if (n > m_size) {
+            reserve(n);
+            for (size_t i = m_size; i < n; i++) {
+                new (&m_data[i]) T(val);
+            }
+            m_size = n;
+        }
+    }
+
+    void push_back(const T& val) {
+        if (m_size >= m_cap) {
+            reserve(m_cap == 0 ? 8 : m_cap * 2);
+        }
+        new (&m_data[m_size++]) T(val);
+    }
+
+    void pop_back() {
+        if (m_size > 0) {
+            m_size--;
+            m_data[m_size].~T();
+        }
+    }
+
+    void clear() {
+        for (size_t i = 0; i < m_size; i++) {
+            m_data[i].~T();
+        }
+        m_size = 0;
+    }
+
+    T* begin() { return m_data; }
+    const T* begin() const { return m_data; }
+    T* end() { return m_data + m_size; }
+    const T* end() const { return m_data + m_size; }
+};
+
+} // namespace std
+
+#endif

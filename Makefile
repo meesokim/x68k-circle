@@ -40,17 +40,20 @@ CFLAGS += -DRASPPI=$(RASPPI) -DKERNEL_MAX_SIZE=$(KERNEL_MAX_SIZE) \
           -I$(CIRCLEHOME)/addon -I$(CIRCLEHOME)/include -I$(CIRCLEHOME)/addon/vc4 \
           -I$(CURDIR)/Circle -I$(CURDIR)/px68k-libretro \
           -I$(CURDIR)/px68k-libretro/libretro-common/include -I$(CURDIR)/px68k-libretro/libretro \
-          -I$(CURDIR)/px68k-libretro/x68k -I$(CURDIR)/px68k-libretro/fmgen -I$(CURDIR)/px68k-libretro/m68000
+          -I$(CURDIR)/px68k-libretro/x68k -I$(CURDIR)/px68k-libretro/fmgen -I$(CURDIR)/px68k-libretro/m68000 \
+          -I$(CURDIR)/miniz -I$(CURDIR)/SDL
 
 CPPFLAGS += -DRASPPI=$(RASPPI) -DKERNEL_MAX_SIZE=$(KERNEL_MAX_SIZE) \
             -DUSE_VCHIQ_SOUND=$(USE_VCHIQ_SOUND) -DLSB_FIRST -D__LIBRETRO__ \
             -DHAVE_C68K -DC68K_NO_JUMP_TABLE -D__LINUX__ -DARM -marm \
             -DPRId64='"lld"' -DPRIu64='"llu"' -DPRIuPTR='"u"' \
             -fpermissive -Wno-narrowing -Wno-unused-variable -Wno-unused-function \
+            -I$(CURDIR)/include_circle_std \
             -I$(CIRCLEHOME)/addon -I$(CIRCLEHOME)/include -I$(CIRCLEHOME)/addon/vc4 \
             -I$(CURDIR)/Circle -I$(CURDIR)/px68k-libretro \
             -I$(CURDIR)/px68k-libretro/libretro-common/include -I$(CURDIR)/px68k-libretro/libretro \
-            -I$(CURDIR)/px68k-libretro/x68k -I$(CURDIR)/px68k-libretro/fmgen -I$(CURDIR)/px68k-libretro/m68000
+            -I$(CURDIR)/px68k-libretro/x68k -I$(CURDIR)/px68k-libretro/fmgen -I$(CURDIR)/px68k-libretro/m68000 \
+            -I$(CURDIR)/miniz -I$(CURDIR)/SDL
 
 KERNEL_MAX_SIZE = 0x2000000
 DEFINE += -DKERNEL_MAX_SIZE=$(KERNEL_MAX_SIZE)
@@ -62,10 +65,12 @@ C_SRCS := $(wildcard px68k-libretro/m68000/m68000.c) \
           $(wildcard px68k-libretro/x68k/*.c) \
           $(wildcard px68k-libretro/libretro/*.c) \
           px68k-libretro/libretro.c \
-          Circle/webx68k_baremetal.c
+          Circle/webx68k_baremetal.c \
+          miniz/miniz.c miniz/miniz_tdef.c miniz/miniz_tinfl.c miniz/miniz_zip.c
 
 CPP_SRCS := $(wildcard px68k-libretro/fmgen/*.cpp) \
-            $(wildcard Circle/*.cpp)
+            $(wildcard Circle/*.cpp) \
+            SDL/zip_helper.cpp
 
 OBJS := $(addprefix $(BUILDDIR)/,$(C_SRCS:.c=.o) $(CPP_SRCS:.cpp=.o))
 

@@ -1,0 +1,11 @@
+#ifndef _CIRCLE_STD_NEW_H_
+#define _CIRCLE_STD_NEW_H_
+
+#include <stddef.h>
+
+inline void* operator new(size_t, void* p) noexcept { return p; }
+inline void* operator new[](size_t, void* p) noexcept { return p; }
+inline void  operator delete(void*, void*) noexcept {}
+inline void  operator delete[](void*, void*) noexcept {}
+
+#endif

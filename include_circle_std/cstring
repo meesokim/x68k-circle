@@ -1,0 +1,23 @@
+#ifndef _CIRCLE_STD_CSTRING_H_
+#define _CIRCLE_STD_CSTRING_H_
+
+#include <string.h>
+
+namespace std {
+    using ::strlen;
+    using ::strcpy;
+    using ::strncpy;
+    using ::strcmp;
+    using ::strncmp;
+    using ::memcpy;
+    using ::memset;
+    using ::memmove;
+    using ::memcmp;
+    using ::strcat;
+    using ::strncat;
+    using ::strchr;
+    using ::strrchr;
+    using ::strstr;
+}
+
+#endif

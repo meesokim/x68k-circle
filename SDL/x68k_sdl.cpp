@@ -12,6 +12,7 @@
 #include <cctype>
 
 #include <dirent.h>
+#include "zip_helper.h"
 
 #ifdef _WIN32
 #include <direct.h>
@@ -499,6 +500,7 @@ struct FileEntry {
 class CFilePicker {
 public:
     std::string current_dir;
+    std::string current_zip_path;
     std::vector<FileEntry> entries;
     int selected_idx;
     int scroll_offset;
@@ -535,7 +537,36 @@ public:
         status_timer = SDL_GetTicks() + 3000;
     }
 
+    void ScanZipArchive() {
+        entries.clear();
+        selected_idx = 0;
+        scroll_offset = 0;
+
+        // Parent directory ".." to exit ZIP archive
+        FileEntry parent;
+        parent.name = "..";
+        parent.full_path = "";
+        parent.is_dir = true;
+        parent.size = 0;
+        entries.push_back(parent);
+
+        auto zip_disks = ListZipDisks(current_zip_path);
+        for (const auto &zd : zip_disks) {
+            FileEntry fe;
+            fe.name = zd.name;
+            fe.full_path = current_zip_path + "#" + std::to_string(zd.file_index) + "#" + zd.name;
+            fe.is_dir = false;
+            fe.size = zd.size;
+            entries.push_back(fe);
+        }
+
+        num_subdirs = 0;
+        num_disk_files = (int)zip_disks.size();
+        printf("[px68k] Scanned ZIP '%s': %d disks\n", current_zip_path.c_str(), num_disk_files);
+    }
+
     void ScanDirectory() {
+        current_zip_path.clear();
         entries.clear();
         selected_idx = 0;
         scroll_offset = 0;
@@ -605,7 +636,7 @@ public:
                                 ext == ".88d" || ext == ".hdm" || ext == ".dup" ||
                                 ext == ".2hd" || ext == ".img" || ext == ".hds" ||
                                 ext == ".hdf" || ext == ".cmd" || ext == ".m3u" ||
-                                ext == ".fd"  || ext == ".fdi") {
+                                ext == ".fd"  || ext == ".fdi" || ext == ".zip") {
                                 FileEntry fe;
                                 fe.name = de->d_name;
                                 fe.full_path = full;
@@ -633,11 +664,17 @@ public:
         for (auto &d : dirs) entries.push_back(d);
         for (auto &f : files) entries.push_back(f);
 
-        printf("[px68k] Scanned '%s': %d subdirs, %d disks (total %zu entries)\n",
+        printf("[px68k] Scanned '%s': %d subdirs, %d disks/archives (total %zu entries)\n",
                current_dir.c_str(), num_subdirs, num_disk_files, entries.size());
     }
 
     void NavigateToParent() {
+        if (!current_zip_path.empty()) {
+            current_zip_path.clear();
+            ScanDirectory();
+            return;
+        }
+
         while (current_dir.length() > 1 && (current_dir.back() == '/' || current_dir.back() == '\\')) {
 #ifdef _WIN32
             if (current_dir.length() == 3 && current_dir[1] == ':') break;
@@ -688,14 +725,24 @@ public:
         DrawBoxRGB565(s_ui_buffer, 800, 10, 72, 780, 24, 0x4228);
 
         char pathBuf[256];
-        snprintf(pathBuf, sizeof(pathBuf), "Path: %.48s  [%d subdirs, %d disks]",
-                 current_dir.c_str(), num_subdirs, num_disk_files);
-        DrawTextRGB565(s_ui_buffer, 800, 18, 76, pathBuf, 0xFFE0, 0x18C6);
+        if (!current_zip_path.empty()) {
+            std::string zname = current_zip_path;
+            size_t slash = zname.find_last_of("/\\");
+            if (slash != std::string::npos) zname = zname.substr(slash + 1);
+            snprintf(pathBuf, sizeof(pathBuf), "ZIP: %.44s  [%d disks inside archive]",
+                     zname.c_str(), num_disk_files);
+            DrawTextRGB565(s_ui_buffer, 800, 18, 76, pathBuf, 0xFD20, 0x18C6);
+        } else {
+            snprintf(pathBuf, sizeof(pathBuf), "Path: %.48s  [%d subdirs, %d disks]",
+                     current_dir.c_str(), num_subdirs, num_disk_files);
+            DrawTextRGB565(s_ui_buffer, 800, 18, 76, pathBuf, 0xFFE0, 0x18C6);
+        }
 
-        // Clickable [ UP .. ] button on Directory Bar
+        // Clickable [ UP .. ] / [ EXIT ] button on Directory Bar
         FillBoxRGB565(s_ui_buffer, 800, 705, 74, 80, 20, 0x2A69);
         DrawBoxRGB565(s_ui_buffer, 800, 705, 74, 80, 20, 0x07FF);
-        DrawTextRGB565(s_ui_buffer, 800, 713, 76, "[ UP .. ]", 0xFFFF, 0x2A69);
+        const char *upBtnText = !current_zip_path.empty() ? "[ EXIT ]" : "[ UP .. ]";
+        DrawTextRGB565(s_ui_buffer, 800, 713, 76, upBtnText, 0xFFFF, 0x2A69);
 
         // File List Container (Y: 102..526)
         FillBoxRGB565(s_ui_buffer, 800, 10, 102, 780, 424, 0x0000);
@@ -722,8 +769,13 @@ public:
                 const auto &e = entries[idx];
 
                 if (e.name == "..") {
-                    DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[UP-DIR] ..  (Parent Directory)", is_sel ? 0xFFFF : 0xFFE0, bg);
-                    DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, "[ GO UP ]", is_sel ? 0xFFFF : 0x07FF, bg);
+                    if (!current_zip_path.empty()) {
+                        DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[UP-ZIP] ..  (Exit ZIP Archive)", is_sel ? 0xFFFF : 0xFFE0, bg);
+                        DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, "[ EXIT ]", is_sel ? 0xFFFF : 0x07FF, bg);
+                    } else {
+                        DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[UP-DIR] ..  (Parent Directory)", is_sel ? 0xFFFF : 0xFFE0, bg);
+                        DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, "[ GO UP ]", is_sel ? 0xFFFF : 0x07FF, bg);
+                    }
                 } else if (e.is_dir) {
                     DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[DIR]   ", is_sel ? 0xFFFF : 0x07FF, bg);
                     std::string dname = e.name + "/";
@@ -731,22 +783,26 @@ public:
                     DrawTextRGB565(s_ui_buffer, 800, 84, y_pos, dname.c_str(), is_sel ? 0xFFFF : 0xFFE0, bg);
                     DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, "[ OPEN > ]", is_sel ? 0xFFFF : 0x07E0, bg);
                 } else {
+                    bool is_zip = IsZipFilename(e.name);
                     bool is_hdd = (e.name.find(".hdf") != std::string::npos || e.name.find(".hds") != std::string::npos);
-                    uint16_t tag_color = is_hdd ? 0x07E0 : 0x07FF;
-                    DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, is_hdd ? "[HDD]   " : "[FDD]   ", is_sel ? 0xFFFF : tag_color, bg);
+                    uint16_t tag_color = is_zip ? 0xFD20 : (is_hdd ? 0x07E0 : 0x07FF);
+                    const char *tag = is_zip ? "[ZIP]   " : (is_hdd ? "[HDD]   " : "[FDD]   ");
+                    DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, tag, is_sel ? 0xFFFF : tag_color, bg);
 
                     std::string fname = e.name;
                     if (fname.length() > 56) fname = fname.substr(0, 53) + "...";
                     DrawTextRGB565(s_ui_buffer, 800, 84, y_pos, fname.c_str(), 0xFFFF, bg);
 
-                    // File size
+                    // File size or action
                     char sizeStr[32];
-                    if (e.size >= 1024 * 1024) {
+                    if (is_zip) {
+                        snprintf(sizeStr, sizeof(sizeStr), "[ VIEW > ]");
+                    } else if (e.size >= 1024 * 1024) {
                         snprintf(sizeStr, sizeof(sizeStr), "%5.1f MB", (double)e.size / (1024.0 * 1024.0));
                     } else {
                         snprintf(sizeStr, sizeof(sizeStr), "%5u KB", (unsigned)(e.size / 1024));
                     }
-                    DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, sizeStr, is_sel ? 0xFFFF : 0x9CE7, bg);
+                    DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, sizeStr, is_sel ? 0xFFFF : (is_zip ? 0x07E0 : 0x9CE7), bg);
                 }
             }
 
@@ -846,6 +902,64 @@ public:
                 } else if (entry.is_dir) {
                     current_dir = entry.full_path;
                     ScanDirectory();
+                } else if (!current_zip_path.empty()) {
+                    // Selecting disk inside a ZIP archive! entry.full_path is "zip_path#index#name"
+                    size_t p1 = entry.full_path.find('#');
+                    size_t p2 = entry.full_path.find('#', p1 + 1);
+                    if (p1 != std::string::npos && p2 != std::string::npos) {
+                        std::string zpath = entry.full_path.substr(0, p1);
+                        uint32_t fidx = (uint32_t)std::stoul(entry.full_path.substr(p1 + 1, p2 - p1 - 1));
+                        std::string extracted = ExtractZipEntry(zpath, fidx, "keropi/cache");
+                        if (!extracted.empty()) {
+                            out_path = extracted;
+                            out_drive = target_drive;
+
+                            // If mounting into FDD0, check if there's a companion disk to auto-insert into FDD1
+                            if (target_drive == 0) {
+                                auto zdisks = ListZipDisks(zpath);
+                                if (zdisks.size() > 1) {
+                                    for (const auto &zd : zdisks) {
+                                        if (zd.file_index != fidx) {
+                                            std::string ext2 = ExtractZipEntry(zpath, zd.file_index, "keropi/cache");
+                                            if (!ext2.empty()) {
+                                                s_current_fdd[1] = ext2;
+                                                FDD_SetFD(1, (char*)ext2.c_str(), 0);
+                                                FDD_SetFDInt();
+                                                printf("[px68k] Auto-inserted companion disk into FDD1: %s\n", ext2.c_str());
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            selected = true;
+                            modal_active = false;
+                        } else {
+                            SetStatus("Failed to extract disk from ZIP!");
+                        }
+                    }
+                } else if (IsZipFilename(entry.name)) {
+                    // Selected a .zip file in normal directory
+                    auto zdisks = ListZipDisks(entry.full_path);
+                    if (zdisks.empty()) {
+                        SetStatus("No supported X68000 disk found in ZIP!");
+                    } else if (zdisks.size() == 1) {
+                        // Single disk inside ZIP: extract and mount directly
+                        std::string extracted = ExtractZipEntry(entry.full_path, zdisks[0].file_index, "keropi/cache");
+                        if (!extracted.empty()) {
+                            out_path = extracted;
+                            out_drive = target_drive;
+                            selected = true;
+                            modal_active = false;
+                        } else {
+                            SetStatus("Failed to extract disk from ZIP!");
+                        }
+                    } else {
+                        // Multiple disks inside ZIP: enter archive to browse and select
+                        current_zip_path = entry.full_path;
+                        ScanZipArchive();
+                    }
                 } else {
                     out_path = entry.full_path;
                     out_drive = target_drive;
@@ -1040,36 +1154,25 @@ public:
                             bool do_open = false;
 
                             if (entry.name == "..") {
-                                // Click on [UP-DIR] or right tag or double click
+                                // Click on [UP-DIR]/[UP-ZIP] or right tag or double click
                                 if (mx <= 100 || mx >= 660 || (idx == selected_idx && (now - last_click_time) < 450)) {
                                     do_open = true;
                                 }
-                            } else if (entry.is_dir) {
-                                // Single-click on [DIR] tag on left OR [ OPEN > ] button on right OR double-click row
+                            } else if (entry.is_dir || IsZipFilename(entry.name)) {
+                                // Single-click on [DIR]/[ZIP] tag on left OR [ OPEN > ] / [ VIEW > ] button on right OR double-click row
                                 if (mx <= 80 || mx >= 660 || (idx == selected_idx && (now - last_click_time) < 450)) {
                                     do_open = true;
                                 }
                             } else {
-                                // File: Double click or right click area
+                                // Disk File: Double click or right click area
                                 if (mx >= 660 || (idx == selected_idx && (now - last_click_time) < 450)) {
                                     do_open = true;
                                 }
                             }
 
+                            selected_idx = idx;
                             if (do_open) {
-                                if (entry.name == "..") {
-                                    NavigateToParent();
-                                } else if (entry.is_dir) {
-                                    current_dir = entry.full_path;
-                                    ScanDirectory();
-                                } else {
-                                    out_path = entry.full_path;
-                                    out_drive = target_drive;
-                                    selected = true;
-                                    modal_active = false;
-                                }
-                            } else {
-                                selected_idx = idx;
+                                ActivateCurrentSelection();
                             }
                             last_click_time = now;
                         }
@@ -1237,11 +1340,31 @@ int main(int argc, char *argv[])
     struct retro_game_info game;
     memset(&game, 0, sizeof(game));
 
+    std::string actualBootDisk;
     if (disk_to_load && FileExists(disk_to_load)) {
-        printf("[px68k] Booting with disk: %s\n", disk_to_load);
-        game.path = disk_to_load;
+        if (IsZipFilename(disk_to_load)) {
+            auto disks = ExtractAllDisksFromZip(disk_to_load, "keropi/cache");
+            if (!disks.empty()) {
+                actualBootDisk = disks[0];
+                if (disks.size() > 1) {
+                    s_current_fdd[1] = disks[1];
+                    FDD_SetFD(1, (char*)disks[1].c_str(), 0);
+                    printf("[px68k] Auto-inserted multi-disk zip into FDD1: %s\n", disks[1].c_str());
+                }
+            } else {
+                actualBootDisk = disk_to_load;
+            }
+        } else {
+            actualBootDisk = disk_to_load;
+        }
+    }
+
+    if (!actualBootDisk.empty() && FileExists(actualBootDisk.c_str())) {
+        printf("[px68k] Booting with disk: %s\n", actualBootDisk.c_str());
+        game.path = actualBootDisk.c_str();
+        s_current_fdd[0] = actualBootDisk;
         if (!retro_load_game(&game)) {
-            fprintf(stderr, "[px68k] Failed to load disk: %s\n", disk_to_load);
+            fprintf(stderr, "[px68k] Failed to load disk: %s\n", actualBootDisk.c_str());
             retro_load_game(NULL);
         }
     } else {
@@ -1267,6 +1390,18 @@ int main(int argc, char *argv[])
             int new_drive = 0;
             if (s_picker.RunModal(s_window, s_renderer, s_texture, new_disk, new_drive, false)) {
                 if (!new_disk.empty()) {
+                    if (IsZipFilename(new_disk)) {
+                        auto disks = ExtractAllDisksFromZip(new_disk, "keropi/cache");
+                        if (!disks.empty()) {
+                            new_disk = disks[0];
+                            if (disks.size() > 1 && new_drive == 0) {
+                                s_current_fdd[1] = disks[1];
+                                FDD_SetFD(1, (char*)disks[1].c_str(), 0);
+                                FDD_SetFDInt();
+                                printf("[px68k] Inserted companion disk into FDD1: %s\n", disks[1].c_str());
+                            }
+                        }
+                    }
                     FDD_SetFD(new_drive, (char*)new_disk.c_str(), 0);
                     s_current_fdd[new_drive] = new_disk;
                     FDD_SetFDInt();

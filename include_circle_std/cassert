@@ -1,0 +1,6 @@
+#ifndef _CIRCLE_STD_CASSERT_H_
+#define _CIRCLE_STD_CASSERT_H_
+
+#include <assert.h>
+
+#endif
