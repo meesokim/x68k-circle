@@ -87,7 +87,7 @@ include $(CIRCLEHOME)/Rules.mk
 
 CIRCLE_LIB_RASPPI := $(shell awk '/^RASPPI/{print $$3; exit}' $(CIRCLELIBDIR)/Config.mk 2>/dev/null)
 
-ifeq ($(filter clean clean-all circle,$(MAKECMDGOALS)),)
+ifeq ($(filter clean clean-all circle linux host windows x68k.linux x68k.window.exe linux-clean windows-clean,$(MAKECMDGOALS)),)
 ifeq ($(wildcard $(CIRCLELIBDIR)/lib/libcircle.a),)
 $(error Circle libs missing in $(CIRCLELIBDIR). Run: make circle RASPPI=$(RASPPI))
 endif
@@ -167,3 +167,17 @@ circle:
 		cp -a $(CIRCLEHOME)/$$p $(CIRCLELIBDIR)/$$p; \
 	done
 	@echo "  INST  Circle libs -> $(CIRCLELIBDIR)"
+
+.PHONY: linux host windows x68k.linux x68k.window.exe linux-clean windows-clean
+
+linux host x68k.linux:
+	$(MAKE) -f Makefile.linux
+
+linux-clean:
+	$(MAKE) -f Makefile.linux clean
+
+windows x68k.window.exe:
+	$(MAKE) -f Makefile.windows
+
+windows-clean:
+	$(MAKE) -f Makefile.windows clean

@@ -19,3 +19,7 @@ mcp/node_modules/
 build/
 dist_baremetal/
 px68k-libretro/
+x68k.linux
+x68k.window.exe
+SDL2.dll
+keropi/

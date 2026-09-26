@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#if !defined(__linux__) && !defined(_WIN32)
 // _sbrk implementation for newlib heap
 void *_sbrk(ptrdiff_t incr) {
     extern char _end;
@@ -16,6 +17,7 @@ void *_sbrk(ptrdiff_t incr) {
 
     return (void *)prev_heap_end;
 }
+#endif
 
 // strlcpy implementation for libretro
 size_t strlcpy_retro__(char *dest, const char *src, size_t size)
@@ -102,7 +104,6 @@ int webx68k_scsi_bus_log_max(void) { return 0; }
 void webx68k_ram_watch_refresh(void) {}
 void webx68k_mem_read_watch_refresh(void) {}
 void webx68k_drv_hook_refresh(void) {}
-void webx68k_trace_start(const char *tag) { (void)tag; }
 
 int webx68k_serial_rx(const uint8_t *data, int length) { (void)data; (void)length; return 0; }
 int webx68k_serial_tx_available(void) { return 0; }

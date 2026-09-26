@@ -1,0 +1,66 @@
+CC  := gcc
+CXX := g++
+
+BUILDDIR := build/linux
+TARGET   := x68k.linux
+
+SDL_CFLAGS := $(shell sdl2-config --cflags)
+SDL_LIBS   := $(shell sdl2-config --libs)
+
+COMMON_FLAGS := -O2 -g -Wall -Wno-unused-function -Wno-unused-variable -Wno-narrowing -Wno-write-strings \
+                -Wno-incompatible-pointer-types -Wno-int-conversion -Wno-implicit-function-declaration -Wno-implicit-int \
+                -D__LIBRETRO__ -DHAVE_C68K -DC68K_NO_JUMP_TABLE -DLSB_FIRST -D__LINUX__ -DPRId64='"lld"' -DPRIu64='"llu"' \
+                $(SDL_CFLAGS)
+
+CFLAGS   := -std=gnu99 $(COMMON_FLAGS)
+CXXFLAGS := -std=gnu++14 $(COMMON_FLAGS) -fpermissive
+
+INCLUDES := -Ipx68k-libretro \
+            -Ipx68k-libretro/libretro-common/include \
+            -Ipx68k-libretro/libretro \
+            -Ipx68k-libretro/x68k \
+            -Ipx68k-libretro/fmgen \
+            -Ipx68k-libretro/m68000 \
+            -ICircle \
+            -ISDL
+
+C_SRCS := $(wildcard px68k-libretro/m68000/m68000.c) \
+          $(wildcard px68k-libretro/m68000/c68k/*.c) \
+          $(wildcard px68k-libretro/x68k/*.c) \
+          $(wildcard px68k-libretro/libretro/*.c) \
+          px68k-libretro/libretro.c \
+          Circle/webx68k_baremetal.c
+
+CPP_SRCS := $(wildcard px68k-libretro/fmgen/*.cpp) \
+            SDL/x68k_sdl.cpp
+
+C_OBJS   := $(addprefix $(BUILDDIR)/,$(C_SRCS:.c=.o))
+CPP_OBJS := $(addprefix $(BUILDDIR)/,$(CPP_SRCS:.cpp=.o))
+ALL_OBJS := $(C_OBJS) $(CPP_OBJS)
+
+all: $(TARGET)
+
+.SECONDEXPANSION:
+
+$(BUILDDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@echo "  CC    $@"
+	@$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(BUILDDIR)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	@echo "  CXX   $@"
+	@$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+LDFLAGS  += -Wl,--allow-multiple-definition
+
+$(TARGET): $(ALL_OBJS)
+	@echo "  LINK  $@"
+	@$(CXX) $^ $(LDFLAGS) $(SDL_LIBS) -lm -lpthread -o $@
+	@echo "Build successful: $(TARGET)"
+
+clean:
+	@echo "  CLEAN $(BUILDDIR) $(TARGET)"
+	@rm -rf $(BUILDDIR) $(TARGET)
+
+.PHONY: all clean

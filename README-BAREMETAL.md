@@ -75,7 +75,37 @@ make RASPPI=4
 
 ---
 
-## 4. SD 카드 설치 및 부팅 방법
+## 4. PC용 바이너리 빌드 (Linux & Windows)
+
+베어메탈 라즈베리파이 외에도 개발 및 테스트 편의를 위해 SDL2 기반의 네이티브 실행 파일 생성을 지원합니다:
+
+### Linux 네이티브 빌드 (`x68k.linux`)
+```bash
+make linux
+# 또는
+make x68k.linux
+# 실행
+./x68k.linux [디스크이미지.xdf]
+```
+
+### Windows 실행 파일 빌드 (`x68k.window.exe`)
+MinGW-w64 (`i686-w64-mingw32-gcc`) 및 SDL2 MinGW 라이브러리를 사용하여 크로스 컴파일됩니다:
+```bash
+make windows
+# 또는
+make x68k.window.exe
+# 빌드 결과물: x68k.window.exe, SDL2.dll
+```
+
+### PC 조작 키 및 단축키
+- **방향키 / Enter**: 게임패드 1P 십자키 / Start
+- **Z, X / A, S**: 게임패드 1P 버튼 B, A / Y, X
+- **F10**: 전체화면 전환 (Toggle Fullscreen)
+- **F11 / 마우스 휠 클릭**: 마우스 캡처 모드 전환 (Mouse Grab)
+
+---
+
+## 5. SD 카드 설치 및 부팅 방법
 
 1. FAT32로 포맷된 SD 카드를 준비합니다.
 2. Circle의 기본 펌웨어 파일(`bootcode.bin`, `start.elf` 또는 `start4.elf`, `fixup.dat` 등)이 SD 카드 루트에 위치해야 합니다.
