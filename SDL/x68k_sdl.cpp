@@ -503,10 +503,13 @@ public:
     int selected_idx;
     int scroll_offset;
     int target_drive; // 0 for FDD0, 1 for FDD1
+    int num_subdirs;
+    int num_disk_files;
     std::string status_msg;
     uint32_t status_timer;
 
-    CFilePicker() : selected_idx(0), scroll_offset(0), target_drive(0), status_timer(0) {
+    CFilePicker() : selected_idx(0), scroll_offset(0), target_drive(0),
+                    num_subdirs(0), num_disk_files(0), status_timer(0) {
         char cwd[1024];
 #ifdef _WIN32
         if (_getcwd(cwd, sizeof(cwd))) current_dir = cwd;
@@ -514,6 +517,14 @@ public:
         if (getcwd(cwd, sizeof(cwd))) current_dir = cwd;
 #endif
         else current_dir = ".";
+
+#ifdef _WIN32
+        char full[1024];
+        if (_fullpath(full, current_dir.c_str(), sizeof(full))) current_dir = full;
+#else
+        char resolved[1024];
+        if (realpath(current_dir.c_str(), resolved)) current_dir = resolved;
+#endif
     }
 
     void SetStatus(const std::string &msg) {
@@ -526,8 +537,28 @@ public:
         selected_idx = 0;
         scroll_offset = 0;
 
+        // Strip trailing slashes unless root
+        while (current_dir.length() > 1 && (current_dir.back() == '/' || current_dir.back() == '\\')) {
+#ifdef _WIN32
+            if (current_dir.length() == 3 && current_dir[1] == ':') break;
+#endif
+            current_dir.pop_back();
+        }
+
+        bool is_root = false;
+#ifdef _WIN32
+        if ((current_dir.length() <= 3 && current_dir.find(':') != std::string::npos) ||
+            current_dir == "/" || current_dir == "\\") {
+            is_root = true;
+        }
+#else
+        if (current_dir == "/" || current_dir.empty()) {
+            is_root = true;
+        }
+#endif
+
         // Parent directory ".."
-        if (current_dir != "/" && current_dir != "\\") {
+        if (!is_root) {
             FileEntry parent;
             parent.name = "..";
             parent.full_path = "";
@@ -543,7 +574,8 @@ public:
         if (dir) {
             struct dirent *de;
             while ((de = readdir(dir)) != NULL) {
-                if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+                // Ignore dot and hidden files/directories (starting with '.')
+                if (de->d_name[0] == '.') continue;
 
                 std::string full = current_dir;
                 if (!full.empty() && full.back() != '/' && full.back() != '\\') {
@@ -568,7 +600,9 @@ public:
                             for (char &c : ext) c = tolower(c);
                             if (ext == ".xdf" || ext == ".dim" || ext == ".d88" ||
                                 ext == ".88d" || ext == ".hdm" || ext == ".dup" ||
-                                ext == ".2hd" || ext == ".img" || ext == ".hds" || ext == ".hdf") {
+                                ext == ".2hd" || ext == ".img" || ext == ".hds" ||
+                                ext == ".hdf" || ext == ".cmd" || ext == ".m3u" ||
+                                ext == ".fd"  || ext == ".fdi") {
                                 FileEntry fe;
                                 fe.name = de->d_name;
                                 fe.full_path = full;
@@ -590,15 +624,32 @@ public:
             return strcasecmp(a.name.c_str(), b.name.c_str()) < 0;
         });
 
+        num_subdirs = (int)dirs.size();
+        num_disk_files = (int)files.size();
+
         for (auto &d : dirs) entries.push_back(d);
         for (auto &f : files) entries.push_back(f);
     }
 
     void NavigateToParent() {
-        if (current_dir == "/" || current_dir == "\\") return;
+        while (current_dir.length() > 1 && (current_dir.back() == '/' || current_dir.back() == '\\')) {
+#ifdef _WIN32
+            if (current_dir.length() == 3 && current_dir[1] == ':') break;
+#endif
+            current_dir.pop_back();
+        }
+#ifdef _WIN32
+        if ((current_dir.length() <= 3 && current_dir.find(':') != std::string::npos) ||
+            current_dir == "/" || current_dir == "\\") return;
+#else
+        if (current_dir == "/" || current_dir.empty()) return;
+#endif
         size_t last_sep = current_dir.find_last_of("/\\");
         if (last_sep != std::string::npos) {
             if (last_sep == 0) current_dir = "/";
+#ifdef _WIN32
+            else if (last_sep == 2 && current_dir[1] == ':') current_dir = current_dir.substr(0, 3);
+#endif
             else current_dir = current_dir.substr(0, last_sep);
         }
         ScanDirectory();
@@ -629,9 +680,16 @@ public:
         // Directory Path Bar (Y: 72..96)
         FillBoxRGB565(s_ui_buffer, 800, 10, 72, 780, 24, 0x18C6);
         DrawBoxRGB565(s_ui_buffer, 800, 10, 72, 780, 24, 0x4228);
+
         char pathBuf[256];
-        snprintf(pathBuf, sizeof(pathBuf), "Directory: %.90s", current_dir.c_str());
+        snprintf(pathBuf, sizeof(pathBuf), "Path: %.48s  [%d subdirs, %d disks]",
+                 current_dir.c_str(), num_subdirs, num_disk_files);
         DrawTextRGB565(s_ui_buffer, 800, 18, 76, pathBuf, 0xFFE0, 0x18C6);
+
+        // Clickable [ UP .. ] button on Directory Bar
+        FillBoxRGB565(s_ui_buffer, 800, 705, 74, 80, 20, 0x2A69);
+        DrawBoxRGB565(s_ui_buffer, 800, 705, 74, 80, 20, 0x07FF);
+        DrawTextRGB565(s_ui_buffer, 800, 713, 76, "[ UP .. ]", 0xFFFF, 0x2A69);
 
         // File List Container (Y: 102..526)
         FillBoxRGB565(s_ui_buffer, 800, 10, 102, 780, 424, 0x0000);
@@ -641,7 +699,7 @@ public:
         int total = (int)entries.size();
 
         if (total == 0) {
-            DrawTextRGB565(s_ui_buffer, 800, 40, 130, "(No X68000 disk images found in this directory)", 0x8410, 0x0000);
+            DrawTextRGB565(s_ui_buffer, 800, 40, 130, "(This directory is empty - click [ UP .. ] to go back)", 0x8410, 0x0000);
         } else {
             for (int i = 0; i < max_visible; i++) {
                 int idx = scroll_offset + i;
@@ -659,18 +717,20 @@ public:
 
                 if (e.name == "..") {
                     DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[UP-DIR] ..  (Parent Directory)", is_sel ? 0xFFFF : 0xFFE0, bg);
+                    DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, "[ GO UP ]", is_sel ? 0xFFFF : 0x07FF, bg);
                 } else if (e.is_dir) {
-                    DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[DIR]   ", is_sel ? 0xFFFF : 0xFFE0, bg);
+                    DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, "[DIR]   ", is_sel ? 0xFFFF : 0x07FF, bg);
                     std::string dname = e.name + "/";
-                    if (dname.length() > 60) dname = dname.substr(0, 57) + "...";
+                    if (dname.length() > 56) dname = dname.substr(0, 53) + "...";
                     DrawTextRGB565(s_ui_buffer, 800, 84, y_pos, dname.c_str(), is_sel ? 0xFFFF : 0xFFE0, bg);
+                    DrawTextRGB565(s_ui_buffer, 800, 680, y_pos, "[ OPEN > ]", is_sel ? 0xFFFF : 0x07E0, bg);
                 } else {
                     bool is_hdd = (e.name.find(".hdf") != std::string::npos || e.name.find(".hds") != std::string::npos);
                     uint16_t tag_color = is_hdd ? 0x07E0 : 0x07FF;
                     DrawTextRGB565(s_ui_buffer, 800, 20, y_pos, is_hdd ? "[HDD]   " : "[FDD]   ", is_sel ? 0xFFFF : tag_color, bg);
 
                     std::string fname = e.name;
-                    if (fname.length() > 58) fname = fname.substr(0, 55) + "...";
+                    if (fname.length() > 56) fname = fname.substr(0, 53) + "...";
                     DrawTextRGB565(s_ui_buffer, 800, 84, y_pos, fname.c_str(), 0xFFFF, bg);
 
                     // File size
@@ -704,18 +764,54 @@ public:
             DrawTextRGB565(s_ui_buffer, 800, 170, 492, status_msg.c_str(), 0xFFFF, 0x2124);
         }
 
-        // Footer Bar (Y: 532..594)
+        // Footer Bar (Y: 532..596)
         FillBoxRGB565(s_ui_buffer, 800, 0, 532, 800, 68, 0x10A4);
         DrawBoxRGB565(s_ui_buffer, 800, 0, 532, 800, 68, 0x31C8);
 
-        DrawTextRGB565(s_ui_buffer, 800, 20, 540,
-                       "[Enter]: Open / Insert Disk    [Backspace]: Up Directory    [1 / 2]: Target FDD0/FDD1",
-                       0xFFFF, 0x10A4);
-        DrawTextRGB565(s_ui_buffer, 800, 20, 558,
-                       "[E]: Eject Target Drive         [R]: Reset System            [Esc]: Resume Emulation",
+        // Action Buttons (Y: 536..558)
+        // 1. [ OPEN/SELECT ] (x: 15..140)
+        FillBoxRGB565(s_ui_buffer, 800, 15, 536, 125, 22, 0x0288);
+        DrawBoxRGB565(s_ui_buffer, 800, 15, 536, 125, 22, 0x07E0);
+        DrawTextRGB565(s_ui_buffer, 800, 18, 539, "[ OPEN/SELECT ]", 0xFFFF, 0x0288);
+
+        // 2. [ UP .. ] (x: 145..230)
+        FillBoxRGB565(s_ui_buffer, 800, 145, 536, 85, 22, 0x2128);
+        DrawBoxRGB565(s_ui_buffer, 800, 145, 536, 85, 22, 0x07FF);
+        DrawTextRGB565(s_ui_buffer, 800, 152, 539, "[ UP .. ]", 0xFFFF, 0x2128);
+
+        // 3. [ FDD 0 ] (x: 235..325)
+        uint16_t d0_bg = (target_drive == 0) ? 0x035D : 0x18C6;
+        FillBoxRGB565(s_ui_buffer, 800, 235, 536, 90, 22, d0_bg);
+        DrawBoxRGB565(s_ui_buffer, 800, 235, 536, 90, 22, (target_drive == 0) ? 0xFFFF : 0x4228);
+        DrawTextRGB565(s_ui_buffer, 800, 244, 539, "[ FDD 0 ]", (target_drive == 0) ? 0xFFE0 : 0xCE79, d0_bg);
+
+        // 4. [ FDD 1 ] (x: 330..420)
+        uint16_t d1_bg = (target_drive == 1) ? 0x035D : 0x18C6;
+        FillBoxRGB565(s_ui_buffer, 800, 330, 536, 90, 22, d1_bg);
+        DrawBoxRGB565(s_ui_buffer, 800, 330, 536, 90, 22, (target_drive == 1) ? 0xFFFF : 0x4228);
+        DrawTextRGB565(s_ui_buffer, 800, 339, 539, "[ FDD 1 ]", (target_drive == 1) ? 0xFFE0 : 0xCE79, d1_bg);
+
+        // 5. [ EJECT ] (x: 425..510)
+        FillBoxRGB565(s_ui_buffer, 800, 425, 536, 85, 22, 0x3100);
+        DrawBoxRGB565(s_ui_buffer, 800, 425, 536, 85, 22, 0xF800);
+        DrawTextRGB565(s_ui_buffer, 800, 432, 539, "[ EJECT ]", 0xFFFF, 0x3100);
+
+        // 6. [ RESET ] (x: 515..600)
+        FillBoxRGB565(s_ui_buffer, 800, 515, 536, 85, 22, 0x3180);
+        DrawBoxRGB565(s_ui_buffer, 800, 515, 536, 85, 22, 0xFD20);
+        DrawTextRGB565(s_ui_buffer, 800, 522, 539, "[ RESET ]", 0xFFFF, 0x3180);
+
+        // 7. [ CLOSE/ESC ] (x: 675..785)
+        FillBoxRGB565(s_ui_buffer, 800, 675, 536, 110, 22, 0x2124);
+        DrawBoxRGB565(s_ui_buffer, 800, 675, 536, 110, 22, 0x8410);
+        DrawTextRGB565(s_ui_buffer, 800, 678, 539, "[ CLOSE/ESC ]", 0xFFFF, 0x2124);
+
+        // Hint lines
+        DrawTextRGB565(s_ui_buffer, 800, 20, 563,
+                       "Keys: Enter/Space/Right: Open Subdir | Backspace/Left: Parent | 1/2: Target Drive | Esc: Close",
                        0xCE79, 0x10A4);
-        DrawTextRGB565(s_ui_buffer, 800, 20, 576,
-                       "Mouse: Click to Select, Double-click to Open/Insert, Scroll Wheel to Navigate",
+        DrawTextRGB565(s_ui_buffer, 800, 20, 579,
+                       "Mouse: Click [DIR] or [UP] to Navigate | Double-click to Select | Scroll to Browse",
                        0x8410, 0x10A4);
     }
 
@@ -732,9 +828,26 @@ public:
 
         const int max_visible = 21;
         uint32_t last_click_time = 0;
-        int last_click_idx = -1;
         bool modal_active = true;
         bool selected = false;
+
+        auto ActivateCurrentSelection = [&]() {
+            int total = (int)entries.size();
+            if (selected_idx >= 0 && selected_idx < total) {
+                const auto &entry = entries[selected_idx];
+                if (entry.name == "..") {
+                    NavigateToParent();
+                } else if (entry.is_dir) {
+                    current_dir = entry.full_path;
+                    ScanDirectory();
+                } else {
+                    out_path = entry.full_path;
+                    out_drive = target_drive;
+                    selected = true;
+                    modal_active = false;
+                }
+            }
+        };
 
         while (modal_active && s_running) {
             SDL_Event e;
@@ -785,6 +898,7 @@ public:
                         scroll_offset = std::max(0, total - max_visible);
                         break;
                     case SDLK_BACKSPACE:
+                    case SDLK_LEFT:
                         NavigateToParent();
                         break;
                     case SDLK_1:
@@ -817,25 +931,77 @@ public:
                         modal_active = false;
                         break;
                     case SDLK_RETURN:
-                    case SDLK_KP_ENTER: {
-                        if (selected_idx >= 0 && selected_idx < total) {
-                            const auto &entry = entries[selected_idx];
-                            if (entry.name == "..") {
-                                NavigateToParent();
-                            } else if (entry.is_dir) {
-                                current_dir = entry.full_path;
-                                ScanDirectory();
-                            } else {
-                                out_path = entry.full_path;
-                                out_drive = target_drive;
-                                selected = true;
-                                modal_active = false;
+                    case SDLK_KP_ENTER:
+                    case SDLK_SPACE:
+                    case SDLK_RIGHT:
+                        ActivateCurrentSelection();
+                        break;
+                    default:
+                        break;
+                    }
+                }
+
+                if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+                    int total = (int)entries.size();
+                    switch (e.cbutton.button) {
+                    case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                        if (selected_idx > 0) {
+                            selected_idx--;
+                            if (selected_idx < scroll_offset) scroll_offset = selected_idx;
+                        }
+                        break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                        if (selected_idx < total - 1) {
+                            selected_idx++;
+                            if (selected_idx >= scroll_offset + max_visible) {
+                                scroll_offset = selected_idx - max_visible + 1;
                             }
                         }
                         break;
-                    }
-                    default:
+                    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                    case SDL_CONTROLLER_BUTTON_B:
+                        NavigateToParent();
                         break;
+                    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                    case SDL_CONTROLLER_BUTTON_A:
+                    case SDL_CONTROLLER_BUTTON_START:
+                        ActivateCurrentSelection();
+                        break;
+                    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+                    case SDL_CONTROLLER_BUTTON_X:
+                        target_drive = 0;
+                        SetStatus("Target switched to FDD0 (Drive A)");
+                        break;
+                    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+                    case SDL_CONTROLLER_BUTTON_Y:
+                        target_drive = 1;
+                        SetStatus("Target switched to FDD1 (Drive B)");
+                        break;
+                    case SDL_CONTROLLER_BUTTON_BACK:
+                        modal_active = false;
+                        break;
+                    }
+                } else if (e.type == SDL_JOYBUTTONDOWN) {
+                    if (e.jbutton.button == 0) ActivateCurrentSelection();
+                    else if (e.jbutton.button == 1) NavigateToParent();
+                } else if (e.type == SDL_JOYHATMOTION) {
+                    int total = (int)entries.size();
+                    if (e.jhat.value & SDL_HAT_UP) {
+                        if (selected_idx > 0) {
+                            selected_idx--;
+                            if (selected_idx < scroll_offset) scroll_offset = selected_idx;
+                        }
+                    } else if (e.jhat.value & SDL_HAT_DOWN) {
+                        if (selected_idx < total - 1) {
+                            selected_idx++;
+                            if (selected_idx >= scroll_offset + max_visible) {
+                                scroll_offset = selected_idx - max_visible + 1;
+                            }
+                        }
+                    } else if (e.jhat.value & SDL_HAT_LEFT) {
+                        NavigateToParent();
+                    } else if (e.jhat.value & SDL_HAT_RIGHT) {
+                        ActivateCurrentSelection();
                     }
                 }
 
@@ -852,15 +1018,39 @@ public:
                     int my = e.button.y;
                     int mx = e.button.x;
 
-                    // Click inside list area
+                    // 1. Directory Bar [ UP .. ] Button (Y: 72..96, X: 700..785)
+                    if (my >= 72 && my <= 96 && mx >= 700 && mx <= 785) {
+                        NavigateToParent();
+                        continue;
+                    }
+
+                    // 2. Click inside list area
                     if (my >= 106 && my < 106 + max_visible * 20 && mx >= 10 && mx <= 770) {
                         int row = (my - 106) / 20;
                         int idx = scroll_offset + row;
                         if (idx >= 0 && idx < (int)entries.size()) {
                             uint32_t now = SDL_GetTicks();
-                            if (idx == selected_idx && (now - last_click_time) < 400) {
-                                // Double click!
-                                const auto &entry = entries[idx];
+                            const auto &entry = entries[idx];
+                            bool do_open = false;
+
+                            if (entry.name == "..") {
+                                // Click on [UP-DIR] or right tag or double click
+                                if (mx <= 100 || mx >= 660 || (idx == selected_idx && (now - last_click_time) < 450)) {
+                                    do_open = true;
+                                }
+                            } else if (entry.is_dir) {
+                                // Single-click on [DIR] tag on left OR [ OPEN > ] button on right OR double-click row
+                                if (mx <= 80 || mx >= 660 || (idx == selected_idx && (now - last_click_time) < 450)) {
+                                    do_open = true;
+                                }
+                            } else {
+                                // File: Double click or right click area
+                                if (mx >= 660 || (idx == selected_idx && (now - last_click_time) < 450)) {
+                                    do_open = true;
+                                }
+                            }
+
+                            if (do_open) {
                                 if (entry.name == "..") {
                                     NavigateToParent();
                                 } else if (entry.is_dir) {
@@ -876,7 +1066,44 @@ public:
                                 selected_idx = idx;
                             }
                             last_click_time = now;
-                            last_click_idx = idx;
+                        }
+                    }
+
+                    // 3. Footer Action Buttons (Y: 536..558)
+                    if (my >= 536 && my <= 558) {
+                        if (mx >= 15 && mx <= 140) {
+                            // [ OPEN/SELECT ]
+                            ActivateCurrentSelection();
+                        } else if (mx >= 145 && mx <= 230) {
+                            // [ UP .. ]
+                            NavigateToParent();
+                        } else if (mx >= 235 && mx <= 325) {
+                            // [ FDD 0 ]
+                            target_drive = 0;
+                            SetStatus("Target switched to FDD0 (Drive A)");
+                        } else if (mx >= 330 && mx <= 420) {
+                            // [ FDD 1 ]
+                            target_drive = 1;
+                            SetStatus("Target switched to FDD1 (Drive B)");
+                        } else if (mx >= 425 && mx <= 510) {
+                            // [ EJECT ]
+                            if (!is_startup) {
+                                FDD_EjectFD(target_drive);
+                                s_current_fdd[target_drive] = "";
+                                FDD_SetFDInt();
+                                char msg[64];
+                                snprintf(msg, sizeof(msg), "FDD%d Ejected", target_drive);
+                                SetStatus(msg);
+                            }
+                        } else if (mx >= 515 && mx <= 600) {
+                            // [ RESET ]
+                            if (!is_startup) {
+                                WinX68k_Reset();
+                                SetStatus("System Resetting...");
+                            }
+                        } else if (mx >= 675 && mx <= 785) {
+                            // [ CLOSE/ESC ]
+                            modal_active = false;
                         }
                     }
                 }

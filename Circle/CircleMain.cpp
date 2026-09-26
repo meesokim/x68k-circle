@@ -146,7 +146,11 @@ static const char* FindBootDisk(void)
         "SD:/keropi/human302.xdf",
         "SD:/boot.xdf",
         "SD:/boot.dim",
-        "SD:/boot.d88"
+        "SD:/boot.d88",
+        "SD:/roms/human302.xdf",
+        "SD:/roms/boot.xdf",
+        "SD:/fdd/human302.xdf",
+        "SD:/x68k/human302.xdf"
     };
 
     FILINFO fno;
@@ -156,24 +160,39 @@ static const char* FindBootDisk(void)
         }
     }
 
-    DIR dir;
-    if (f_opendir(&dir, "SD:/") == FR_OK) {
-        while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0) {
-            size_t len = strlen(fno.fname);
-            if (len > 4) {
-                const char *ext = fno.fname + len - 4;
-                if (strcasecmp(ext, ".xdf") == 0 ||
-                    strcasecmp(ext, ".dim") == 0 ||
-                    strcasecmp(ext, ".d88") == 0 ||
-                    strcasecmp(ext, ".hds") == 0) {
-                    static char foundPath[256];
-                    snprintf(foundPath, sizeof(foundPath), "SD:/%s", fno.fname);
-                    f_closedir(&dir);
-                    return foundPath;
+    static const char *searchDirs[] = {
+        "SD:/",
+        "SD:/roms",
+        "SD:/fdd",
+        "SD:/x68k",
+        "SD:/disks"
+    };
+
+    for (unsigned d = 0; d < sizeof(searchDirs)/sizeof(searchDirs[0]); d++) {
+        DIR dir;
+        if (f_opendir(&dir, searchDirs[d]) == FR_OK) {
+            while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0) {
+                if (fno.fname[0] == '.') continue;
+                size_t len = strlen(fno.fname);
+                if (len > 4) {
+                    const char *ext = fno.fname + len - 4;
+                    if (strcasecmp(ext, ".xdf") == 0 ||
+                        strcasecmp(ext, ".dim") == 0 ||
+                        strcasecmp(ext, ".d88") == 0 ||
+                        strcasecmp(ext, ".hdm") == 0 ||
+                        strcasecmp(ext, ".2hd") == 0 ||
+                        strcasecmp(ext, ".dup") == 0 ||
+                        strcasecmp(ext, ".hds") == 0 ||
+                        strcasecmp(ext, ".hdf") == 0) {
+                        static char foundPath[256];
+                        snprintf(foundPath, sizeof(foundPath), "%s/%s", searchDirs[d], fno.fname);
+                        f_closedir(&dir);
+                        return foundPath;
+                    }
                 }
             }
+            f_closedir(&dir);
         }
-        f_closedir(&dir);
     }
 
     return nullptr;
