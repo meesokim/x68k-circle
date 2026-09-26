@@ -1,6 +1,6 @@
 # PX68K Baremetal for Raspberry Pi (Circle)
 
-`x68k-cicle`는 Sharp X68000 에뮬레이터 코어(`px68k-libretro`)를 `blueberry-msx`와 동일한 방식으로 [Circle C++ 베어메탈 프레임워크](https://github.com/rsta2/circle) 기반으로 포팅하여, 리눅스 OS 없이 라즈베리파이 하드웨어에서 직접 부팅 및 실행되는 초고속 베어메탈 에뮬레이션 시스템입니다.
+`x68k-circle`는 Sharp X68000 에뮬레이터 코어(`px68k-libretro`)를 `blueberry-msx`와 동일한 방식으로 [Circle C++ 베어메탈 프레임워크](https://github.com/rsta2/circle) 기반으로 포팅하여, 리눅스 OS 없이 라즈베리파이 하드웨어에서 직접 부팅 및 실행되는 초고속 베어메탈 에뮬레이션 시스템입니다.
 
 ---
 
@@ -23,7 +23,7 @@
 ## 2. 디렉터리 구성
 
 ```
-x68k-cicle/
+x68k-circle/
 ├── Circle/                    # Circle 베어메탈 어댑터 레이어
 │   ├── CircleKernel.h/cpp     # Circle 커널 클래스 (장치 초기화 및 장치 관리)
 │   ├── CircleVideo.h/cpp      # 화면 프레임버퍼 렌더러
