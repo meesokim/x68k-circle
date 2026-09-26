@@ -522,8 +522,11 @@ public:
         char full[1024];
         if (_fullpath(full, current_dir.c_str(), sizeof(full))) current_dir = full;
 #else
-        char resolved[1024];
-        if (realpath(current_dir.c_str(), resolved)) current_dir = resolved;
+        char *resolved = realpath(current_dir.c_str(), NULL);
+        if (resolved) {
+            current_dir = resolved;
+            free(resolved);
+        }
 #endif
     }
 
