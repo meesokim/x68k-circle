@@ -12,6 +12,8 @@ extern "C" {
 void CircleVideoInit(CScreenDevice *pScreenDevice);
 void CircleVideoClear(uint16_t color);
 void CircleVideoUpdate(const void *data, unsigned width, unsigned height, size_t pitch_bytes);
+// RGB565 overlay, tightly packed. Shown at the upper right for duration_us.
+void CircleVideoSetOverlay(const uint16_t *pixels, unsigned width, unsigned height, unsigned duration_us);
 uint16_t* CircleVideoGetFramebuffer(void);
 unsigned CircleVideoGetWidth(void);
 unsigned CircleVideoGetHeight(void);

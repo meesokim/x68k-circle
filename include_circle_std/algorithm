@@ -20,6 +20,27 @@ inline void swap(T& a, T& b) {
     b = tmp;
 }
 
+template<typename T, typename Comp>
+inline void sort(T* first, T* last, Comp comp) {
+    if (!first || last - first < 2) return;
+    const int n = (int)(last - first);
+    auto sift = [&](int root, int count) {
+        for (;;) {
+            int child = root * 2 + 1;
+            if (child >= count) break;
+            if (child + 1 < count && comp(first[child], first[child + 1])) child++;
+            if (!comp(first[root], first[child])) break;
+            swap(first[root], first[child]);
+            root = child;
+        }
+    };
+    for (int start = n / 2 - 1; start >= 0; --start) sift(start, n);
+    for (int end = n - 1; end > 0; --end) {
+        swap(first[0], first[end]);
+        sift(0, end);
+    }
+}
+
 } // namespace std
 
 #endif

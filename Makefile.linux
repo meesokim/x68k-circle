@@ -22,7 +22,8 @@ INCLUDES := -Ipx68k-libretro \
             -Ipx68k-libretro/fmgen \
             -Ipx68k-libretro/m68000 \
             -Iminiz \
-            -ISDL
+            -ISDL \
+            -Ifont
 
 C_SRCS := $(wildcard px68k-libretro/m68000/m68000.c) \
           $(wildcard px68k-libretro/m68000/c68k/*.c) \
@@ -30,10 +31,12 @@ C_SRCS := $(wildcard px68k-libretro/m68000/m68000.c) \
           $(wildcard px68k-libretro/libretro/*.c) \
           px68k-libretro/libretro.c \
           Circle/webx68k_baremetal.c \
+          font/ttf_draw.c \
           miniz/miniz.c miniz/miniz_tdef.c miniz/miniz_tinfl.c miniz/miniz_zip.c
 
 CPP_SRCS := $(wildcard px68k-libretro/fmgen/*.cpp) \
             SDL/zip_helper.cpp \
+            SDL/hangul16.cpp \
             SDL/x68k_sdl.cpp
 
 C_OBJS   := $(addprefix $(BUILDDIR)/,$(C_SRCS:.c=.o))

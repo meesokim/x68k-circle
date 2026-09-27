@@ -17,6 +17,7 @@ struct dirent {
     long           d_ino;
     unsigned short d_reclen;
     unsigned char  d_type;
+    unsigned long long d_size;
     char           d_name[256];
 };
 

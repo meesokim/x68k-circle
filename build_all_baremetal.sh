@@ -23,6 +23,19 @@ echo "=========================================="
 
 mkdir -p "${APPDIR}/dist_baremetal/keropi"
 
+if [ ! -f "${APPDIR}/dist_baremetal/NanumGothic.ttf" ]; then
+    for cand in \
+        "${HOME}/blueberry-msx/dist_baremetal/NanumGothic.ttf" \
+        /usr/share/fonts/truetype/nanum/NanumGothic.ttf
+    do
+        if [ -f "$cand" ]; then
+            cp -f "$cand" "${APPDIR}/dist_baremetal/NanumGothic.ttf"
+            echo ">>> Copied NanumGothic.ttf from $cand"
+            break
+        fi
+    done
+fi
+
 # Check if px68k-libretro exists, clone if missing
 if [ ! -d "${APPDIR}/px68k-libretro" ]; then
     echo ">>> Cloning px68k-libretro..."

@@ -370,6 +370,7 @@ struct dirent *readdir(DIR *dirp) {
         memset(&de, 0, sizeof(de));
         strncpy(de.d_name, fno.fname, sizeof(de.d_name) - 1);
         de.d_type = (fno.fattrib & AM_DIR) ? DT_DIR : DT_REG;
+        de.d_size = (unsigned long long)fno.fsize;
         return &de;
     }
     return NULL;

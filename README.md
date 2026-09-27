@@ -2,6 +2,50 @@
 
 [日本語](README.ja.md)
 
+## X68000 포팅 경과
+
+`px68k-libretro` 코어를 Raspberry Pi 베어메탈(Circle)과 Linux, Windows SDL2 호스트에서 같은 디스크 메뉴로 돌리도록 맞춰 두었다. Pi 5는 대상이 아니다.
+
+### 돌아가는 환경
+
+| 호스트 | 만드는 법 | 결과 |
+|---|---|---|
+| Raspberry Pi 1 / Zero | `make RASPPI=1` | `dist_baremetal/kernel.img`, `app.bin` |
+| Raspberry Pi 2 | `make RASPPI=2` | `kernel7.img`, `app7.bin` |
+| Raspberry Pi 3 (32비트) | `make RASPPI=3` | `kernel8-32.img`, `app8-32.bin` |
+| Raspberry Pi 4 / 400 | `make RASPPI=4` | `kernel7l.img`, `app7l.bin` |
+| 네 기종 한 번에 | `./build_all_baremetal.sh` | 위 커널 전부 |
+| Linux | `make linux` | `x68k.linux` |
+| Windows (MinGW 크로스) | `make windows` | `x68k.window.exe` |
+
+베어메탈은 OS 없이 Circle로 부팅한다. 화면은 HDMI 800×600 RGB565이고, X68000 화면은 가운데에 둔다. 소리는 VCHIQ(HDMI / 3.5mm, 44100Hz 스테레오)다. USB 키보드, 게임패드, 마우스를 받는다. SD 카드는 FatFS이고 긴 파일명은 UTF-8이다. 시스템 디스크는 `human302.xdf`, ROM은 `keropi/iplrom.dat`와 `keropi/cgrom.dat`다.
+
+### 디스크 메뉴
+
+베어메탈의 ALT, F12, 게임패드 L2는 예전 WinUI(`SWITCH for PX68K`) 대신 Linux와 같은 파일 선택 화면을 연다. 구현은 `SDL/disk_menu.hpp` 한곳이고, 베어메탈은 `Circle/DiskMenuRun.cpp`, Linux와 Windows는 `SDL/x68k_sdl.cpp`의 `RunModal`이다.
+
+- 디렉터리와 디스크 이미지, 디스크가 여러 개인 ZIP을 탐색한다. 파일이 많은 폴더는 한 번의 디렉터리 읽기로 디스크만 추리고, 정렬 동안 `Scanning...`을 보여 준다.
+- 글자는 `NanumGothic.ttf`(stb_truetype)로 그리고, 없으면 한글 비트맵으로 떨어진다. 베어메탈과 Linux가 같은 글꼴 경로를 쓴다.
+- 실행 중 디스크를 고르면 바로 닫히지 않고, 메뉴에 남을지 리셋할지 묻는다. 기본 선택은 리셋이다. 메뉴에 남으면 커서는 방금 고른 파일에 있다.
+- 폴더나 ZIP에 들어갈 때 커서 위치를 스택에 넣고, Backspace로 나올 때 꺼내 그 항목에 커서를 되돌린다. 깊이가 늘어도 한 단계씩 돌아온다.
+- 리셋(확인 창, `R` 키, 화면 아래 RESET)을 고르면 메뉴가 닫히고 에뮬레이터로 돌아간다. 화면 가장자리는 지워서 메뉴가 게임 뒤에 남지 않는다.
+- 메뉴가 닫히면 우상단에 FDD0과 FDD1 파일명을 2초간 보여 준다. 비어 있으면 `없음`이다. 처음 부팅에서 고른 디스크도 부팅 직후 같은 표시가 나온다.
+- 처음 실행 때 디스크를 고르는 화면은 확인 창 없이 그 디스크로 부팅한다.
+
+메뉴 안에서 ALT+1 / ALT+2는 선택한 파일을 FDD0 / FDD1에 넣고, ALT+S는 두 드라이브를 바꾼다. ALT+Z와 F11은 마지막으로 연 게임 ZIP을 연다. Enter는 열기, Backspace는 상위, Esc는 게임으로 복귀다.
+
+### SD 카드에 넣기
+
+`copy_to_sd.sh`는 rsync로, SD에 없거나 내용이 다른 파일만 복사한다. Circle 커널을 Linux 펌웨어 커널로 덮어쓰지 않는다. `dist_baremetal`의 커널, 부트 펌웨어, `config.txt`, `human302.xdf`, `NanumGothic.ttf`, `keropi/`가 대상이다.
+
+```bash
+./copy_to_sd.sh /media/$USER/BOOT
+```
+
+빌드와 배포 절차의 나머지 설명은 [README-BAREMETAL.md](README-BAREMETAL.md)에 있다.
+
+---
+
 A web-based X68000 emulator player, powered by [px68k-libretro](https://github.com/uraraworks/px68k-libretro)
 (`emscripten` branch) compiled to WebAssembly. The ROM and system disk are
 bundled, so it's a "just open the URL and Human68k boots" experience.

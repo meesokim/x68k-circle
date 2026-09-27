@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "hangul16.h"
+#include "ttf_draw.h"
 
 static const unsigned char font_data[] =
 {
@@ -231,31 +233,190 @@ static const unsigned char font_data[] =
 	0x00, 0x00, 0x00, 0x6C, 0x00, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7E, 0x06, 0x0C, 0xF8, 0x00, // 0xFF
 };
 
-static inline void DrawCharRGB565(uint16_t *buf, int stride, int x, int y, unsigned char c, uint16_t fg, uint16_t bg = 0, bool transparent_bg = false)
+static inline void DrawCharRGB565(uint16_t *buf, int stride, int x, int y, unsigned char c, uint16_t fg, uint16_t bg = 0, bool transparent_bg = false, int clip_w = 800, int clip_h = 600)
 {
-    if (x < 0 || x + 8 > 800 || y < 0 || y + 16 > 600) return;
     for (int r = 0; r < 16; r++) {
+        int py = y + r;
+        if (py < 0 || py >= clip_h) continue;
         uint8_t bits = (c >= 0x21 && c <= 0xFF) ? font_data[(c - 0x21) * 16 + r] : 0;
-        uint16_t *dst = buf + (y + r) * stride + x;
+        uint16_t *dst = buf + py * stride;
         for (int col = 0; col < 8; col++) {
+            int px = x + col;
+            if (px < 0 || px >= clip_w) continue;
             if (bits & (0x80 >> col)) {
-                dst[col] = fg;
+                dst[px] = fg;
             } else if (!transparent_bg) {
-                dst[col] = bg;
+                dst[px] = bg;
             }
         }
     }
 }
 
-static inline void DrawTextRGB565(uint16_t *buf, int stride, int x, int y, const char *str, uint16_t fg, uint16_t bg = 0, bool transparent_bg = false)
+static inline void DrawBitmap16RGB565(uint16_t *buf, int stride, int x, int y, const uint8_t *bits, uint16_t fg, uint16_t bg, bool transparent_bg, int clip_w, int clip_h)
 {
-    if (!str) return;
-    int cur_x = x;
-    while (*str) {
-        DrawCharRGB565(buf, stride, cur_x, y, (unsigned char)*str, fg, bg, transparent_bg);
-        cur_x += 8;
-        str++;
+    if (!bits) return;
+    for (int r = 0; r < 16; r++) {
+        int py = y + r;
+        if (py < 0 || py >= clip_h) continue;
+        unsigned row = ((unsigned)bits[r * 2] << 8) | bits[r * 2 + 1];
+        uint16_t *dst = buf + py * stride;
+        for (int col = 0; col < 16; col++) {
+            int px = x + col;
+            if (px < 0 || px >= clip_w) continue;
+            if (row & (0x8000u >> col)) {
+                dst[px] = fg;
+            } else if (!transparent_bg) {
+                dst[px] = bg;
+            }
+        }
     }
+}
+
+static inline int TextGlyphWidth(uint32_t cp)
+{
+    if (cp >= 0xAC00 && cp <= 0xD7A3) return 16;
+    if (cp >= 0x3131 && cp <= 0x318E) return 16;
+    if (cp < 0x20) return 0;
+    return 8;
+}
+
+// Returns the number of codepoints, or -1 when s is not valid UTF-8.
+static inline int DecodeUtf8Text(const unsigned char *s, uint32_t *cps, int maxn)
+{
+    int n = 0;
+    while (*s) {
+        if (n >= maxn) break;
+        unsigned char c = *s;
+        if (c < 0x80) {
+            cps[n++] = c;
+            s++;
+            continue;
+        }
+        if ((c & 0xE0) == 0xC0 && s[1]) {
+            if ((s[1] & 0xC0) != 0x80) return -1;
+            uint32_t cp = ((c & 0x1F) << 6) | (s[1] & 0x3F);
+            if (cp < 0x80) return -1;
+            cps[n++] = cp;
+            s += 2;
+            continue;
+        }
+        if ((c & 0xF0) == 0xE0 && s[1] && s[2]) {
+            if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80) return -1;
+            uint32_t cp = ((c & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+            if (cp < 0x800 || (cp >= 0xD800 && cp <= 0xDFFF)) return -1;
+            cps[n++] = cp;
+            s += 3;
+            continue;
+        }
+        if ((c & 0xF8) == 0xF0 && s[1] && s[2] && s[3]) {
+            if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80) return -1;
+            uint32_t cp = ((c & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+            if (cp < 0x10000 || cp > 0x10FFFF) return -1;
+            cps[n++] = cp;
+            s += 4;
+            continue;
+        }
+        return -1;
+    }
+    return n;
+}
+
+static inline int DecodeCp949Text(const unsigned char *s, uint32_t *cps, int maxn)
+{
+    int n = 0;
+    while (*s && n < maxn) {
+        if (*s < 0x80) {
+            cps[n++] = *s++;
+            continue;
+        }
+        if (s[1]) {
+            uint32_t cp = DecodeCp949Pair(s[0], s[1]);
+            if (cp) {
+                cps[n++] = cp;
+                s += 2;
+                continue;
+            }
+            unsigned t = s[1];
+            bool trail = (t >= 0x41 && t <= 0x5A) || (t >= 0x61 && t <= 0x7A) || (t >= 0x81 && t <= 0xFE);
+            if (trail) {
+                cps[n++] = '?';
+                s += 2;
+                continue;
+            }
+        }
+        cps[n++] = '?';
+        s++;
+    }
+    return n;
+}
+
+static inline void DrawCodepointRGB565(uint16_t *buf, int stride, int x, int y, uint32_t cp, uint16_t fg, uint16_t bg, bool transparent_bg, int clip_w, int clip_h)
+{
+    if (cp >= 0xAC00 && cp <= 0xD7A3) {
+        DrawBitmap16RGB565(buf, stride, x, y, HangulGlyph16(cp), fg, bg, transparent_bg, clip_w, clip_h);
+        return;
+    }
+    if (cp >= 0x3131 && cp <= 0x318E) {
+        DrawBitmap16RGB565(buf, stride, x, y, HangulGlyph16(cp), fg, bg, transparent_bg, clip_w, clip_h);
+        return;
+    }
+    unsigned char c = (cp >= 0x20 && cp <= 0xFF) ? (unsigned char)cp : '?';
+    if (cp < 0x20) return;
+    DrawCharRGB565(buf, stride, x, y, c, fg, bg, transparent_bg, clip_w, clip_h);
+}
+
+// Draws UTF-8, or CP949 when the bytes are not valid UTF-8.
+// Stops at limit_x (0 means clip_w) and appends "..." when the rest does not fit.
+// Returns the x position after the last glyph.
+static inline int DrawTextRGB565(uint16_t *buf, int stride, int x, int y, const char *str, uint16_t fg, uint16_t bg = 0, bool transparent_bg = false, int limit_x = 0, int clip_w = 800, int clip_h = 600)
+{
+    if (!str) return x;
+    if (limit_x <= 0) limit_x = clip_w;
+    if (limit_x > clip_w) limit_x = clip_w;
+
+    if (TtfEnsure(16)) {
+        int adv = TtfDrawRGB565(buf, stride, clip_w, clip_h, x, y, limit_x,
+                                str, fg, bg, transparent_bg ? 0 : 1);
+        if (adv >= 0) return x + adv;
+    }
+
+    uint32_t cps[512];
+    int n = DecodeUtf8Text((const unsigned char *)str, cps, 512);
+    if (n < 0) n = DecodeCp949Text((const unsigned char *)str, cps, 512);
+
+    int total = 0;
+    for (int i = 0; i < n; i++) total += TextGlyphWidth(cps[i]);
+
+    int draw_n = n;
+    bool trunc = false;
+    if (x + total > limit_x) {
+        trunc = true;
+        int budget = limit_x - x - 24;
+        if (budget < 0) budget = 0;
+        int used = 0;
+        draw_n = 0;
+        while (draw_n < n) {
+            int w = TextGlyphWidth(cps[draw_n]);
+            if (used + w > budget) break;
+            used += w;
+            draw_n++;
+        }
+    }
+
+    int cur_x = x;
+    for (int i = 0; i < draw_n; i++) {
+        int w = TextGlyphWidth(cps[i]);
+        if (w && cur_x + w > limit_x) break;
+        DrawCodepointRGB565(buf, stride, cur_x, y, cps[i], fg, bg, transparent_bg, clip_w, clip_h);
+        cur_x += w;
+    }
+    if (trunc && cur_x + 24 <= limit_x) {
+        DrawCharRGB565(buf, stride, cur_x, y, '.', fg, bg, transparent_bg, clip_w, clip_h);
+        DrawCharRGB565(buf, stride, cur_x + 8, y, '.', fg, bg, transparent_bg, clip_w, clip_h);
+        DrawCharRGB565(buf, stride, cur_x + 16, y, '.', fg, bg, transparent_bg, clip_w, clip_h);
+        cur_x += 24;
+    }
+    return cur_x;
 }
 
 static inline void FillBoxRGB565(uint16_t *buf, int stride, int x, int y, int w, int h, uint16_t color)
